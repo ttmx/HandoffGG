@@ -32,6 +32,18 @@ export type AppConfig = {
 	autoswitchEnabled: boolean;
 	output: FlowConfig;
 	input: FlowConfig;
+	chatmix: ChatMixConfig;
+};
+
+export type ChatMixRoute = 'game' | 'chat';
+
+export type ChatMixAppRoute = {
+	route: ChatMixRoute;
+	displayName: string;
+};
+
+export type ChatMixConfig = {
+	appRoutes: Record<string, ChatMixAppRoute>;
 };
 
 /** A priority-list row enriched with the matching live endpoint, for rendering. */
@@ -106,6 +118,18 @@ export type PresenceSnapshot = {
 	observedAtMs: number;
 };
 
+export type AudioSession = {
+	id: string;
+	appId: string;
+	displayName: string;
+	executablePath: string | null;
+	processId: number;
+	route: ChatMixRoute;
+	routeSource: string;
+	volume: number;
+	muted: boolean;
+};
+
 export type DiagnosticEvent = {
 	timestampMs: number;
 	level: string;
@@ -127,6 +151,7 @@ const FALLBACK_ACCENT = '#3584e4';
 class NativeBridge {
 	config = $state<AppConfig | null>(null);
 	endpoints = $state<AudioEndpoint[]>([]);
+	audioSessions = $state<AudioSession[]>([]);
 	presence = $state<PresenceSnapshot | null>(null);
 	diagnostics = $state<DiagnosticEvent[]>([]);
 	busy = $state(true);
@@ -147,13 +172,18 @@ class NativeBridge {
 	 */
 	start = async (): Promise<() => void> => {
 		const unlisten = await listen(STATE_CHANGED_EVENT, this.refreshLiveState);
+		const sessionTimer = setInterval(this.refreshLiveState, 3000);
 		// The system accent can change while the app runs; the user has to leave the
 		// window to change it, so refetching on focus keeps us in sync without polling.
 		const unfocus = await getCurrentWindow().onFocusChanged(({ payload: focused }) => {
-			if (focused) this.loadAccent();
+			if (focused) {
+				this.loadAccent();
+				this.refreshLiveState();
+			}
 		});
 		await Promise.all([this.refreshAll(), this.loadAccent()]);
 		return () => {
+			clearInterval(sessionTimer);
 			unlisten();
 			unfocus();
 		};
@@ -172,16 +202,18 @@ class NativeBridge {
 		this.busy = true;
 		this.error = '';
 		try {
-			const [nextConfig, nextEndpoints, nextPresence, nextDiagnostics] = await Promise.all([
+			const [nextConfig, nextEndpoints, nextPresence, nextDiagnostics, nextSessions] = await Promise.all([
 				apiInvoke<AppConfig>('get_config'),
 				apiInvoke<AudioEndpoint[]>('list_endpoints'),
 				apiInvoke<PresenceSnapshot>('get_presence'),
 				apiInvoke<DiagnosticEvent[]>('get_diagnostics'),
+				apiInvoke<AudioSession[]>('list_audio_sessions'),
 			]);
 			this.config = nextConfig;
 			this.endpoints = nextEndpoints;
 			this.presence = nextPresence;
 			this.diagnostics = nextDiagnostics.reverse();
+			this.audioSessions = nextSessions;
 		} catch (err) {
 			this.error = String(err);
 		} finally {
@@ -191,12 +223,14 @@ class NativeBridge {
 
 	refreshLiveState = async (): Promise<void> => {
 		try {
-			const [nextPresence, nextDiagnostics] = await Promise.all([
+			const [nextPresence, nextDiagnostics, nextSessions] = await Promise.all([
 				apiInvoke<PresenceSnapshot>('get_presence'),
 				apiInvoke<DiagnosticEvent[]>('get_diagnostics'),
+				apiInvoke<AudioSession[]>('list_audio_sessions'),
 			]);
 			this.presence = nextPresence;
 			this.diagnostics = nextDiagnostics.reverse();
+			this.audioSessions = nextSessions;
 		} catch (err) {
 			this.error = String(err);
 		}
@@ -226,6 +260,27 @@ class NativeBridge {
 		this.error = '';
 		try {
 			await apiInvoke('apply_now');
+			await this.refreshLiveState();
+		} catch (err) {
+			this.error = String(err);
+		}
+	};
+
+	setChatMixRoute = async (
+		appId: string,
+		route: ChatMixRoute,
+		displayName: string,
+	): Promise<void> => {
+		this.error = '';
+		try {
+			this.config = await apiInvoke<AppConfig>('set_app_chatmix_route', {
+				appId,
+				route,
+				displayName,
+			});
+			this.saved = true;
+			clearTimeout(this.#savedTimer);
+			this.#savedTimer = setTimeout(() => (this.saved = false), 1600);
 			await this.refreshLiveState();
 		} catch (err) {
 			this.error = String(err);

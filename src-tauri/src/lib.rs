@@ -1,4 +1,5 @@
 mod audio;
+mod chatmix;
 mod config;
 mod models;
 mod presence;
@@ -9,9 +10,10 @@ mod theme;
 mod windows_audio;
 
 use crate::audio::{AudioBackend, NativeAudioBackend};
+use crate::chatmix::ChatMixVolumeManager;
 use crate::models::{
-    now_ms, AppConfig, AudioEndpoint, DecisionAction, DiagnosticEvent, EndpointFlow, EndpointState,
-    PresenceSnapshot, SwitchDecision,
+    now_ms, AppConfig, AudioEndpoint, AudioSession, ChatMixAppRoute, ChatMixRoute, DecisionAction,
+    DiagnosticEvent, EndpointFlow, EndpointState, PresenceSnapshot, SwitchDecision,
 };
 use crate::presence::{HeadsetPresenceBackend, SteelSeriesHidPresenceBackend};
 use crate::rules::decide_switch;
@@ -32,6 +34,7 @@ struct AppState {
     config: Mutex<AppConfig>,
     audio: Arc<dyn AudioBackend>,
     presence: Mutex<Box<dyn HeadsetPresenceBackend>>,
+    chatmix: Mutex<ChatMixVolumeManager>,
     last_presence: Mutex<Option<PresenceSnapshot>>,
     diagnostics: Mutex<VecDeque<DiagnosticEvent>>,
 }
@@ -53,6 +56,7 @@ pub fn run() {
                 config: Mutex::new(loaded_config),
                 audio: Arc::new(NativeAudioBackend::new()?),
                 presence: Mutex::new(Box::new(SteelSeriesHidPresenceBackend::arctis_nova_7())),
+                chatmix: Mutex::new(ChatMixVolumeManager::default()),
                 last_presence: Mutex::new(None),
                 diagnostics: Mutex::new(VecDeque::new()),
             });
@@ -67,10 +71,12 @@ pub fn run() {
             get_config,
             save_config,
             list_endpoints,
+            list_audio_sessions,
             get_presence,
             get_diagnostics,
             apply_now,
             set_autoswitch_enabled,
+            set_app_chatmix_route,
             open_settings,
             get_accent_color
         ])
@@ -102,6 +108,15 @@ fn save_config(new_config: AppConfig, state: State<'_, SharedState>) -> Result<A
 #[tauri::command]
 fn list_endpoints(state: State<'_, SharedState>) -> Result<Vec<AudioEndpoint>, String> {
     state.audio.endpoints().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_audio_sessions(state: State<'_, SharedState>) -> Result<Vec<AudioSession>, String> {
+    let config = state.config.lock().clone();
+    state
+        .audio
+        .render_sessions(&config.chatmix)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -148,6 +163,37 @@ fn set_autoswitch_enabled(
 }
 
 #[tauri::command]
+fn set_app_chatmix_route(
+    app_id: String,
+    route: ChatMixRoute,
+    display_name: String,
+    state: State<'_, SharedState>,
+) -> Result<AppConfig, String> {
+    let mut config = state.config.lock().clone();
+    config.chatmix.app_routes.insert(
+        app_id,
+        ChatMixAppRoute {
+            route,
+            display_name,
+        },
+    );
+    config::save(&state.config_path, &config).map_err(|error| error.to_string())?;
+    *state.config.lock() = config.clone();
+
+    if let Some(presence) = state.last_presence.lock().clone() {
+        if let Err(error) = sync_chatmix(&state, &presence) {
+            push_event(
+                &state,
+                DiagnosticEvent::warn(format!("ChatMix apply failed: {error}")),
+            );
+        }
+    }
+
+    push_event(&state, DiagnosticEvent::info("ChatMix app route saved"));
+    Ok(config)
+}
+
+#[tauri::command]
 fn open_settings(app: AppHandle) -> Result<(), String> {
     show_main_window(&app).map_err(|error| error.to_string())
 }
@@ -171,6 +217,15 @@ fn start_monitor(app: AppHandle, state: SharedState) {
                 .lock()
                 .wait_for_event(Duration::from_millis(1_000))
             else {
+                if let Some(presence) = state.last_presence.lock().clone() {
+                    if let Err(error) = sync_chatmix(&state, &presence) {
+                        push_event(
+                            &state,
+                            DiagnosticEvent::warn(format!("ChatMix apply failed: {error}")),
+                        );
+                        let _ = app.emit("autoswapper://state-changed", now_ms());
+                    }
+                }
                 continue;
             };
             process_snapshot(&app, &state, snapshot, &mut stable_connected);
@@ -198,6 +253,12 @@ fn process_snapshot(
     let connection_changed = merged_snapshot.has_connection_status
         && *stable_connected != Some(merged_snapshot.connected);
     *state.last_presence.lock() = Some(merged_snapshot.clone());
+    if let Err(error) = sync_chatmix(state, &merged_snapshot) {
+        push_event(
+            state,
+            DiagnosticEvent::warn(format!("ChatMix apply failed: {error}")),
+        );
+    }
 
     if connection_changed {
         *stable_connected = Some(merged_snapshot.connected);
@@ -253,6 +314,12 @@ fn handle_presence_snapshot(
 ) {
     let connected = snapshot.connected;
     *state.last_presence.lock() = Some(snapshot.clone());
+    if let Err(error) = sync_chatmix(state, &snapshot) {
+        push_event(
+            state,
+            DiagnosticEvent::warn(format!("ChatMix apply failed: {error}")),
+        );
+    }
 
     if let Some(error) = snapshot.error {
         push_event(
@@ -349,6 +416,23 @@ fn apply_decision(state: &AppState, decision: &SwitchDecision) -> anyhow::Result
                     .set_default(endpoint_id, crate::models::EndpointFlow::Capture)?;
             }
         }
+    }
+    Ok(())
+}
+
+fn sync_chatmix(state: &AppState, presence: &PresenceSnapshot) -> anyhow::Result<()> {
+    let config = state.config.lock().clone();
+    let sessions = state.audio.render_sessions(&config.chatmix)?;
+    let changes = state.chatmix.lock().sync(
+        &sessions,
+        presence.connected && presence.has_connection_status,
+        presence.game_volume,
+        presence.chat_volume,
+    );
+    for change in changes {
+        state
+            .audio
+            .set_session_volume(&change.session_id, change.volume)?;
     }
     Ok(())
 }

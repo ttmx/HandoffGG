@@ -25,3 +25,20 @@ pub fn save(path: &PathBuf, config: &AppConfig) -> anyhow::Result<()> {
     fs::write(path, content)
         .with_context(|| format!("failed to write config to {}", path.display()))
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::models::AppConfig;
+
+    #[test]
+    fn deserializes_old_config_with_empty_chatmix() {
+        let json = r#"{
+            "autoswitchEnabled": true,
+            "output": { "priorities": [] },
+            "input": { "priorities": [] }
+        }"#;
+
+        let config: AppConfig = serde_json::from_str(json).expect("old config should load");
+        assert!(config.chatmix.app_routes.is_empty());
+    }
+}

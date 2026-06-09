@@ -76,6 +76,7 @@ Current parser rule:
 
 - Find byte `B0`.
 - Read connection/charging status at `B0 + 3`.
+- Read battery percent at `B0 + 2`.
 - Interpret:
   - `0x00` = headset disconnected/off
   - `0x01` = connected and charging

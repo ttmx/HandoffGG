@@ -1,17 +1,23 @@
 use crate::audio::AudioBackend;
-use crate::models::{AudioEndpoint, EndpointFlow, EndpointState};
+use crate::chatmix::{app_id_for_session, route_for_app};
+use crate::models::{AudioEndpoint, AudioSession, ChatMixConfig, EndpointFlow, EndpointState};
 use anyhow::Context;
 use windows::core::{Interface, GUID, PCWSTR, PWSTR};
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+use windows::Win32::Foundation::{CloseHandle, BOOL};
 use windows::Win32::Media::Audio::{
-    eCapture, eCommunications, eConsole, eMultimedia, eRender, EDataFlow, ERole, IMMDevice,
-    IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE, DEVICE_STATE_DISABLED,
+    eCapture, eCommunications, eConsole, eMultimedia, eRender, EDataFlow, ERole,
+    IAudioSessionControl2, IAudioSessionManager2, IMMDevice, IMMDeviceEnumerator,
+    ISimpleAudioVolume, MMDeviceEnumerator, DEVICE_STATE_ACTIVE, DEVICE_STATE_DISABLED,
     DEVICE_STATE_NOTPRESENT, DEVICE_STATE_UNPLUGGED,
 };
 use windows::Win32::System::Com::StructuredStorage::PropVariantClear;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
     COINIT_APARTMENTTHREADED, STGM_READ,
+};
+use windows::Win32::System::Threading::{
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
 pub struct WindowsAudioBackend;
@@ -60,6 +66,119 @@ impl AudioBackend for WindowsAudioBackend {
             Ok(())
         })
     }
+
+    fn render_sessions(&self, chatmix: &ChatMixConfig) -> anyhow::Result<Vec<AudioSession>> {
+        with_com(|| {
+            let enumerator = device_enumerator()?;
+            let device = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia) }
+                .context("failed to get default render endpoint")?;
+            enumerate_render_sessions(&device, chatmix)
+        })
+    }
+
+    fn set_session_volume(&self, session_id: &str, volume: f32) -> anyhow::Result<()> {
+        with_com(|| {
+            let enumerator = device_enumerator()?;
+            let device = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia) }
+                .context("failed to get default render endpoint")?;
+            let manager: IAudioSessionManager2 = unsafe { device.Activate(CLSCTX_ALL, None) }
+                .context("failed to activate audio session manager")?;
+            let sessions = unsafe { manager.GetSessionEnumerator() }
+                .context("failed to enumerate audio sessions")?;
+            let count = unsafe { sessions.GetCount() }.context("failed to get session count")?;
+            for index in 0..count {
+                let control =
+                    unsafe { sessions.GetSession(index) }.context("failed to get audio session")?;
+                let control2: IAudioSessionControl2 = control
+                    .cast()
+                    .context("failed to query audio session control")?;
+                let id = session_instance_id(&control2)?;
+                if id == session_id {
+                    let volume_control: ISimpleAudioVolume = control
+                        .cast()
+                        .context("failed to query session volume control")?;
+                    unsafe {
+                        volume_control
+                            .SetMasterVolume(volume.clamp(0.0, 1.0), std::ptr::null())
+                            .context("failed to set session volume")?;
+                    }
+                    return Ok(());
+                }
+            }
+            anyhow::bail!("Audio session was not found");
+        })
+    }
+}
+
+fn enumerate_render_sessions(
+    device: &IMMDevice,
+    chatmix: &ChatMixConfig,
+) -> anyhow::Result<Vec<AudioSession>> {
+    let manager: IAudioSessionManager2 = unsafe { device.Activate(CLSCTX_ALL, None) }
+        .context("failed to activate audio session manager")?;
+    let sessions =
+        unsafe { manager.GetSessionEnumerator() }.context("failed to enumerate audio sessions")?;
+    let count = unsafe { sessions.GetCount() }.context("failed to get session count")?;
+    let mut result = Vec::new();
+
+    for index in 0..count {
+        let control =
+            unsafe { sessions.GetSession(index) }.context("failed to get audio session")?;
+        let control2: IAudioSessionControl2 = match control.cast() {
+            Ok(control2) => control2,
+            Err(_) => continue,
+        };
+        if unsafe { control2.IsSystemSoundsSession() }.0 == 0 {
+            continue;
+        }
+        let volume_control: ISimpleAudioVolume = match control.cast() {
+            Ok(volume_control) => volume_control,
+            Err(_) => continue,
+        };
+
+        let id = session_instance_id(&control2)?;
+        let process_id = unsafe { control2.GetProcessId() }.unwrap_or_default();
+        let executable_path = process_image_path(process_id);
+        let raw_display = unsafe { control.GetDisplayName() }
+            .ok()
+            .and_then(|name| pwstr_to_string_and_free(name).ok())
+            .filter(|value| !value.trim().is_empty());
+        let display_name = raw_display
+            .or_else(|| {
+                executable_path
+                    .as_deref()
+                    .and_then(file_name)
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| format!("Process {process_id}"));
+        let app_id = app_id_for_session(executable_path.as_deref(), &display_name, process_id);
+        let (route, route_source) =
+            route_for_app(&app_id, &display_name, executable_path.as_deref(), chatmix);
+        let volume = unsafe { volume_control.GetMasterVolume() }.unwrap_or(1.0);
+        let muted = unsafe { volume_control.GetMute() }
+            .unwrap_or(BOOL(0))
+            .as_bool();
+
+        result.push(AudioSession {
+            id,
+            app_id,
+            display_name,
+            executable_path,
+            process_id,
+            route,
+            route_source,
+            volume,
+            muted,
+        });
+    }
+
+    result.sort_by(|a, b| {
+        a.display_name
+            .cmp(&b.display_name)
+            .then(a.app_id.cmp(&b.app_id))
+            .then(a.id.cmp(&b.id))
+    });
+    Ok(result)
 }
 
 fn enumerate_flow(
@@ -148,6 +267,42 @@ fn pwstr_to_string_and_free(value: PWSTR) -> anyhow::Result<String> {
         CoTaskMemFree(Some(value.0.cast()));
     }
     Ok(result)
+}
+
+fn session_instance_id(control: &IAudioSessionControl2) -> anyhow::Result<String> {
+    let id = unsafe { control.GetSessionInstanceIdentifier() }
+        .context("failed to read session instance id")?;
+    pwstr_to_string_and_free(id)
+}
+
+fn process_image_path(process_id: u32) -> Option<String> {
+    if process_id == 0 {
+        return None;
+    }
+
+    let handle =
+        unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id) }.ok()?;
+    let mut buffer = vec![0_u16; 32_768];
+    let mut size = buffer.len() as u32;
+    let result = unsafe {
+        QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_WIN32,
+            PWSTR(buffer.as_mut_ptr()),
+            &mut size,
+        )
+    };
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
+    result.ok()?;
+    Some(String::from_utf16_lossy(&buffer[..size as usize]))
+}
+
+fn file_name(path: &str) -> Option<&str> {
+    path.rsplit(['\\', '/'])
+        .next()
+        .filter(|value| !value.is_empty())
 }
 
 /// SteelSeries/Arctis endpoints expose a USB dongle that stays present while the

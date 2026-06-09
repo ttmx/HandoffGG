@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { native } from '$lib/native.svelte';
+	import AppRouting from '$lib/components/AppRouting.svelte';
 	import DevicePriorityList from '$lib/components/DevicePriorityList.svelte';
 	import HeadsetStatus from '$lib/components/HeadsetStatus.svelte';
 	import HidStatus from '$lib/components/HidStatus.svelte';
@@ -41,6 +42,8 @@
 				oncommit={native.persistAndApply}
 			/>
 		</section>
+
+		<AppRouting sessions={native.audioSessions} onroute={native.setChatMixRoute} />
 
 		<details class="debug">
 			<summary>Debug</summary>

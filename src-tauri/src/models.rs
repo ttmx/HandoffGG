@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +64,8 @@ pub struct AppConfig {
     pub output: FlowConfig,
     #[serde(default)]
     pub input: FlowConfig,
+    #[serde(default)]
+    pub chatmix: ChatMixConfig,
 }
 
 impl Default for AppConfig {
@@ -71,8 +74,44 @@ impl Default for AppConfig {
             autoswitch_enabled: true,
             output: FlowConfig::default(),
             input: FlowConfig::default(),
+            chatmix: ChatMixConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChatMixRoute {
+    Game,
+    Chat,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMixAppRoute {
+    pub route: ChatMixRoute,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMixConfig {
+    #[serde(default)]
+    pub app_routes: HashMap<String, ChatMixAppRoute>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioSession {
+    pub id: String,
+    pub app_id: String,
+    pub display_name: String,
+    pub executable_path: Option<String>,
+    pub process_id: u32,
+    pub route: ChatMixRoute,
+    pub route_source: String,
+    pub volume: f32,
+    pub muted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

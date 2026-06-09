@@ -426,6 +426,88 @@ dd {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.section-heading {
+  margin-bottom: 12px;
+}
+
+.section-heading p {
+  font-size: 12px;
+}
+
+.app-routing {
+  margin-top: 22px;
+}
+
+.app-session-list {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.app-session {
+  align-items: center;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  padding: 9px 10px;
+}
+
+.app-session:last-child {
+  border-bottom: none;
+}
+
+.app-session-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.app-session-main strong,
+.app-session-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-session-main span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.app-session-meta {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.segmented {
+  background: var(--hover);
+  border-radius: 7px;
+  display: inline-flex;
+  padding: 2px;
+}
+
+.segmented button {
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-muted);
+  min-height: 26px;
+  padding: 0 10px;
+}
+
+.segmented button:hover {
+  border: none;
+  color: var(--text);
+}
+
+.segmented button.active {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
 /* Device priority lists */
 .device-list .zone-label {
   color: var(--text-soft);

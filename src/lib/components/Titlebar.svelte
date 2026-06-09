@@ -43,10 +43,8 @@
 				<span class="switch-track" aria-hidden="true">
 					<span class="switch-thumb"></span>
 				</span>
-				<span>Autoswitch</span>
 			</label>
 		{/if}
-		{#if native.saved}<span class="saved titlebar-saved">Saved</span>{/if}
 	</div>
 	<div class="titlebar-controls">
 		<button class="titlebar-button" aria-label="Minimize" onclick={() => appWindow.minimize()}>

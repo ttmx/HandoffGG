@@ -42,7 +42,7 @@ MI_05 / 0x86  control, connection, and battery events
 offset  value         meaning
   +0     B0           opcode
   +1     ??           unconfirmed charge flag
-  +2     ??           unconfirmed battery-like value
+  +2     00..64       battery percent from startup/status snapshot
   +3     00|01|03     connection: 00 off, 01 charging, 03 on battery
   +4     00..64       ChatMix game level
   +5     00..64       ChatMix chat level

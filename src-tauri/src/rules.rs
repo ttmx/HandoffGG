@@ -82,6 +82,7 @@ mod tests {
             input: FlowConfig {
                 priorities: vec![pref("headset-mic", false), pref("fallback-mic", false)],
             },
+            chatmix: Default::default(),
         }
     }
 

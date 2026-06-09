@@ -10,6 +10,7 @@
 -- What we KNOW (confirmed by working parsers + unit tests in presence.rs):
 --   0xB0 status report:  byte+3 = connection/charge state
 --                                 (0x00 disconnected, 0x01 charging, 0x03 on battery)
+--                        byte+2 = battery percent (startup/status snapshot)
 --                        byte+4 = ChatMix "game" level, byte+5 = ChatMix "chat" level
 --   0x45 wheel event:    byte+1 = ChatMix "game", byte+2 = ChatMix "chat"
 --   0x52 mute event:     byte+2 = microphone muted (0x00 unmuted, 0x01 muted)
@@ -184,7 +185,7 @@ local function dissect(tvb, pinfo, tree)
 		end
 
 		if len > off + 1 then add_uncertain(known, tvb(off + 1, 1), "unconfirmed: charge flag?") end
-		if len > off + 2 then add_uncertain(known, tvb(off + 2, 1), "unconfirmed: battery level?") end
+		if len > off + 2 then known:add(f.battery, tvb(off + 2, 1)) end
 		local info = "Status"
 		if len > off + 3 then
 			local v = tvb(off + 3, 1):uint()

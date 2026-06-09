@@ -497,8 +497,12 @@ fn parse_mic_muted(report: &[u8]) -> Option<bool> {
 }
 
 fn parse_battery_percent(report: &[u8]) -> Option<u8> {
-    let report_index = report.iter().position(|byte| *byte == 0xB7)?;
-    let percent = *report.get(report_index + 1)?;
+    let percent = if let Some(report_index) = report.iter().position(|byte| *byte == 0xB7) {
+        *report.get(report_index + 1)?
+    } else {
+        let b0_index = report.iter().position(|byte| *byte == 0xB0)?;
+        *report.get(b0_index + 2)?
+    };
     (percent <= 100).then_some(percent)
 }
 
@@ -588,6 +592,12 @@ mod tests {
     fn parses_battery_percent_event() {
         let report = [0xB7, 0x4B, 0x00, 0x00];
         assert_eq!(parse_battery_percent(&report), Some(75));
+    }
+
+    #[test]
+    fn parses_battery_percent_from_status_report() {
+        let report = [0x00, 0xB0, 0x02, 0x4C, 0x00, 0x64, 0x64];
+        assert_eq!(parse_battery_percent(&report), Some(76));
     }
 
     #[test]
