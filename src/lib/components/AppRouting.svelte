@@ -16,10 +16,7 @@
 </script>
 
 <section class="mt-5.5 mb-6">
-	<div class="mb-3">
-		<h2 class="mb-3 text-sm font-semibold">App Routing</h2>
-		<p class="mt-1 text-xs text-(--text-muted)">Assign running apps to the Game or Chat side of ChatMix.</p>
-	</div>
+	<h2 class="mb-3 text-sm font-semibold">App Routing</h2>
 
 	{#if sessions.length === 0}
 		<p class="m-0 px-1.5 py-2 text-center text-[13px] text-(--text-muted)">

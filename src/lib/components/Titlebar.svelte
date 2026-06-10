@@ -37,7 +37,7 @@
 	<span class="pl-3.5 text-[13px] font-semibold text-(--text-soft)" data-tauri-drag-region>
 		Autoswapper
 	</span>
-	<div class="ml-auto mr-3 flex items-center gap-3">
+	<div class="mr-auto ml-3 flex items-center gap-3">
 		{#if native.config}
 			<label class="switch-control" title="Autoswitch">
 				<input
