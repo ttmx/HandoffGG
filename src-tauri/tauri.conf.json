@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Autoswapper",
+  "productName": "HandoffGG",
   "version": "0.1.0",
-  "identifier": "dev.tiago.autoswapper",
+  "identifier": "dev.tteles.handoffgg",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:1420",
@@ -12,9 +12,9 @@
   "app": {
     "windows": [
       {
-        "title": "Autoswapper",
-        "width": 920,
-        "height": 680,
+        "title": "HandoffGG",
+        "width": 983,
+        "height": 667,
         "minWidth": 760,
         "minHeight": 560,
         "visible": false,

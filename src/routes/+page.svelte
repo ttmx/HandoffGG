@@ -47,7 +47,7 @@
 
 		<AppRouting sessions={native.audioSessions} onroute={native.setChatMixRoute} />
 
-		<details class="group mb-6">
+		<details class="group">
 			<summary
 				class="flex cursor-pointer list-none items-center gap-1.5 py-1.5 text-[13px] font-semibold text-[var(--text-muted)] select-none [&::-webkit-details-marker]:hidden"
 			>

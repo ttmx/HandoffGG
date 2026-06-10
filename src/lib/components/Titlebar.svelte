@@ -35,7 +35,7 @@
 	data-tauri-drag-region
 >
 	<span class="pl-3.5 text-[13px] font-semibold text-(--text-soft)" data-tauri-drag-region>
-		Autoswapper
+		HandoffGG
 	</span>
 	<div class="mr-auto ml-3 flex items-center gap-3">
 		{#if native.config}

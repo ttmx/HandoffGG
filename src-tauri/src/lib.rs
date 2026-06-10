@@ -61,7 +61,7 @@ pub fn run() {
                 diagnostics: Mutex::new(VecDeque::new()),
             });
 
-            push_event(&state, DiagnosticEvent::info("Autoswapper started"));
+            push_event(&state, DiagnosticEvent::info("HandoffGG started"));
             app.manage(state.clone());
             build_tray(app.handle())?;
             start_monitor(app.handle().clone(), state);
@@ -89,7 +89,7 @@ pub fn run() {
             }
         })
         .run(tauri::generate_context!())
-        .expect("error while running Autoswapper");
+        .expect("error while running HandoffGG");
 }
 
 #[tauri::command]
@@ -459,7 +459,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(app, &[&open, &quit])?;
 
     TrayIconBuilder::new()
-        .tooltip("Autoswapper")
+        .tooltip("HandoffGG")
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id.as_ref() {

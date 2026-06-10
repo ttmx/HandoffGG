@@ -77,7 +77,7 @@
 		Priority — top device wins
 	</p>
 	<section
-		class="grid min-h-13 gap-1.5 rounded-lg border border-dashed border-(--border-strong) p-1.5"
+		class="grid min-h-13 auto-rows-max content-start gap-1.5 rounded-lg border border-dashed border-(--border-strong) p-1.5"
 		use:dndzone={{ items: priorityRows, flipDurationMs: FLIP_MS, dropTargetStyle: {} }}
 		onconsider={(e) => consider('priority', e.detail.items as DeviceRow[])}
 		onfinalize={(e) => finalize('priority', e.detail.items as DeviceRow[])}
@@ -130,7 +130,7 @@
 		Excluded
 	</p>
 	<section
-		class="grid min-h-13 gap-1.5 rounded-lg border border-dashed border-(--border-strong) bg-(--hover) p-1.5"
+		class="grid min-h-13 auto-rows-max content-start gap-1.5 rounded-lg border border-dashed border-(--border-strong) bg-(--hover) p-1.5"
 		use:dndzone={{ items: excludedRows, flipDurationMs: FLIP_MS, dropTargetStyle: {} }}
 		onconsider={(e) => consider('excluded', e.detail.items as DeviceRow[])}
 		onfinalize={(e) => finalize('excluded', e.detail.items as DeviceRow[])}

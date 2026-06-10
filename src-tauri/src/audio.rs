@@ -16,6 +16,6 @@ pub struct NativeAudioBackend;
 #[cfg(not(windows))]
 impl NativeAudioBackend {
     pub fn new() -> anyhow::Result<Self> {
-        anyhow::bail!("Autoswapper V1 only implements the Windows audio backend");
+        anyhow::bail!("HandoffGG V1 only implements the Windows audio backend");
     }
 }

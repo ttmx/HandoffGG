@@ -10,5 +10,9 @@
 	});
 </script>
 
-<Titlebar />
-{@render children()}
+<div class="flex h-dvh flex-col overflow-hidden">
+	<Titlebar />
+	<div class="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+		{@render children()}
+	</div>
+</div>
