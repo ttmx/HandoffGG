@@ -26,10 +26,10 @@
 
 <section class="mb-5 flex items-center" aria-label="Headset status">
 	<div
-		class="flex min-h-[42px] w-[min(100%,544px)] items-center gap-3 rounded-full border border-[var(--border)] bg-[var(--surface)] py-1.5 pr-3.5 pl-2.5"
+		class="flex min-h-10.5 w-[min(100%,544px)] items-center gap-3 rounded-full border border-(--border) bg-(--surface) py-1.5 pr-3.5 pl-2.5"
 	>
 		<div
-			class="relative flex h-[24px] w-[42px] shrink-0 items-stretch rounded-md border border-[var(--border-strong)] p-[3px]"
+			class="relative flex h-6 w-10.5 shrink-0 items-stretch rounded-md border border-(--border-strong) p-0.75"
 			role="meter"
 			aria-label="Battery"
 			aria-valuemin="0"
@@ -38,24 +38,24 @@
 			aria-valuetext={batteryLabel}
 		>
 			<span
-				class="absolute top-1/2 right-[-5px] h-3 w-1 -translate-y-1/2 rounded-r-[3px] bg-[var(--border-strong)]"
+				class="absolute top-1/2 -right-1.25 h-3 w-1 -translate-y-1/2 rounded-r-[3px] bg-(--border-strong)"
 				aria-hidden="true"
 			></span>
-			<span class="h-full rounded-[3px] bg-[var(--ok)]" style={`width: ${batteryFill}%`}
+			<span class="h-full rounded-[3px] bg-(--ok)" style={`width: ${batteryFill}%`}
 			></span>
 			<strong
-				class="absolute top-1/2 left-1/2 z-[1] -translate-x-1/2 -translate-y-1/2 text-[11px] leading-none font-bold text-[var(--accent-contrast)] [text-shadow:0_1px_2px_rgba(0,0,0,0.35)]"
+				class="absolute top-1/2 left-1/2 z-1 -translate-x-1/2 -translate-y-1/2 text-[11px] leading-none font-bold text-(--accent-contrast) [text-shadow:0_1px_2px_rgba(0,0,0,0.35)] pb-px"
 			>
 				{batteryLabel}
 			</strong>
 		</div>
-		<div class="grid min-w-0 w-full grid-cols-[20px_minmax(180px,1fr)_20px] items-center gap-[9px] text-[var(--text-soft)]">
-			<span class="inline-flex h-5 w-5 items-center justify-center text-[var(--text-muted)]" title="Game">
+		<div class="grid min-w-0 w-full grid-cols-[20px_minmax(180px,1fr)_20px] items-center gap-2.25 text-(--text-soft)">
+			<span class="inline-flex h-5 w-5 items-center justify-center text-(--text-muted)" title="Game">
 				<Gamepad2 size={16} strokeWidth={2.2} aria-hidden="true" />
 				<span class="sr-only">Game</span>
 			</span>
 			<div
-				class={`relative h-[22px] ${hasChatMix ? '' : 'opacity-45'}`}
+				class={`relative h-5.5 ${hasChatMix ? '' : 'opacity-45'}`}
 				role="meter"
 				aria-label="ChatMix balance"
 				aria-valuemin="0"
@@ -64,17 +64,17 @@
 				aria-valuetext={chatMixLabel}
 			>
 				<span
-					class="absolute inset-x-0 top-[7px] block h-2 rounded-full bg-[linear-gradient(90deg,var(--accent),var(--border-strong)_50%,var(--ok))]"
+					class="absolute inset-x-0 top-1.75 block h-2 rounded-full bg-[linear-gradient(90deg,var(--accent),var(--border-strong)_50%,var(--ok))]"
 				></span>
 				<span
-					class="absolute top-[3px] left-1/2 h-4 w-0.5 -translate-x-1/2 rounded-full border border-[var(--border-strong)] bg-[var(--surface)]"
+					class="absolute top-0.75 left-1/2 h-4 w-0.5 -translate-x-1/2 rounded-full border border-(--border-strong) bg-(--surface)"
 				></span>
 				<span
-					class="absolute top-px h-5 w-5 -translate-x-1/2 rounded-full border-2 border-[var(--text-soft)] bg-[var(--surface)] shadow-[0_1px_3px_rgba(0,0,0,0.16)]"
+					class="absolute top-px h-5 w-5 -translate-x-1/2 rounded-full border-2 border-(--text-soft) bg-(--surface) shadow-[0_1px_3px_rgba(0,0,0,0.16)]"
 					style={`left: ${chatMixPosition}%`}
 				></span>
 			</div>
-			<span class="inline-flex h-5 w-5 items-center justify-center text-[var(--text-muted)]" title="Chat">
+			<span class="inline-flex h-5 w-5 items-center justify-center text-(--text-muted)" title="Chat">
 				<MessageCircle size={16} strokeWidth={2.2} aria-hidden="true" />
 				<span class="sr-only">Chat</span>
 			</span>
