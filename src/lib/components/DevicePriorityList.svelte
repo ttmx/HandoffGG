@@ -74,7 +74,7 @@
 	<h2 class="mb-3 text-sm font-semibold">{title}</h2>
 
 	<p class="mt-1 mb-2 text-[13px] font-semibold text-(--text-soft)">
-		Priority — top device wins
+		Priority
 	</p>
 	<section
 		class="grid min-h-13 auto-rows-max content-start gap-1.5 rounded-lg border border-dashed border-(--border-strong) p-1.5"

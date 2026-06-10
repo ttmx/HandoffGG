@@ -2,6 +2,7 @@ use crate::models::{AudioSession, ChatMixConfig, ChatMixRoute};
 use std::collections::{HashMap, HashSet};
 
 const VOLUME_EPSILON: f32 = 0.015;
+const APPLIED_VOLUME_EPSILON: f32 = 0.035;
 
 #[derive(Debug, Clone)]
 struct SessionBaseline {
@@ -45,6 +46,10 @@ impl ChatMixVolumeManager {
 
         let mut changes = Vec::new();
         for session in sessions {
+            let route_factor = match session.route {
+                ChatMixRoute::Game => game_factor,
+                ChatMixRoute::Chat => chat_factor,
+            };
             let entry =
                 self.baselines
                     .entry(session.id.clone())
@@ -54,17 +59,23 @@ impl ChatMixVolumeManager {
                     });
 
             if let Some(last_applied) = entry.last_applied_volume {
-                if !nearly_equal(session.volume, last_applied) {
-                    entry.baseline_volume = session.volume;
+                if nearly_equal_with(session.volume, last_applied, APPLIED_VOLUME_EPSILON) {
+                    let target = clamp_volume(entry.baseline_volume * route_factor);
+                    if !nearly_equal_with(session.volume, target, APPLIED_VOLUME_EPSILON) {
+                        entry.last_applied_volume = Some(target);
+                        changes.push(VolumeChange {
+                            session_id: session.id.clone(),
+                            volume: target,
+                        });
+                    }
+                    continue;
                 }
+
+                entry.baseline_volume = session.volume;
             } else {
                 entry.baseline_volume = session.volume;
             }
 
-            let route_factor = match session.route {
-                ChatMixRoute::Game => game_factor,
-                ChatMixRoute::Chat => chat_factor,
-            };
             let target = clamp_volume(entry.baseline_volume * route_factor);
             if !nearly_equal(session.volume, target) {
                 entry.last_applied_volume = Some(target);
@@ -152,6 +163,10 @@ fn clamp_volume(value: f32) -> f32 {
 
 fn nearly_equal(a: f32, b: f32) -> bool {
     (a - b).abs() <= VOLUME_EPSILON
+}
+
+fn nearly_equal_with(a: f32, b: f32, epsilon: f32) -> bool {
+    (a - b).abs() <= epsilon
 }
 
 fn normalize_app_key(value: &str) -> String {
@@ -289,6 +304,47 @@ mod tests {
             Some(50),
         );
         assert!((second[0].volume - 0.4).abs() < 0.001);
+    }
+
+    #[test]
+    fn applied_volume_rounding_does_not_decay_baseline() {
+        let mut manager = ChatMixVolumeManager::default();
+        let first = manager.sync(
+            &[session("browser", ChatMixRoute::Game, 0.8)],
+            true,
+            Some(50),
+            Some(100),
+        );
+        assert!((first[0].volume - 0.4).abs() < 0.001);
+
+        let second = manager.sync(
+            &[session("browser", ChatMixRoute::Game, 0.38)],
+            true,
+            Some(50),
+            Some(100),
+        );
+        assert!(second.is_empty());
+    }
+
+    #[test]
+    fn chatmix_factor_change_applies_after_previous_managed_volume() {
+        let mut manager = ChatMixVolumeManager::default();
+        let first = manager.sync(
+            &[session("browser", ChatMixRoute::Game, 0.8)],
+            true,
+            Some(50),
+            Some(100),
+        );
+        assert!((first[0].volume - 0.4).abs() < 0.001);
+
+        let second = manager.sync(
+            &[session("browser", ChatMixRoute::Game, 0.4)],
+            true,
+            Some(25),
+            Some(100),
+        );
+        assert_eq!(second.len(), 1);
+        assert!((second[0].volume - 0.2).abs() < 0.001);
     }
 
     #[test]

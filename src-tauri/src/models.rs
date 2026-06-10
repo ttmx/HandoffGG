@@ -66,6 +66,8 @@ pub struct AppConfig {
     pub input: FlowConfig,
     #[serde(default)]
     pub chatmix: ChatMixConfig,
+    #[serde(default)]
+    pub debug: DebugConfig,
 }
 
 impl Default for AppConfig {
@@ -75,8 +77,34 @@ impl Default for AppConfig {
             output: FlowConfig::default(),
             input: FlowConfig::default(),
             chatmix: ChatMixConfig::default(),
+            debug: DebugConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebugConfig {
+    #[serde(default = "default_true")]
+    pub chatmix_enabled: bool,
+    #[serde(default)]
+    pub chatmix_dry_run: bool,
+    #[serde(default = "default_true")]
+    pub audio_session_polling_enabled: bool,
+}
+
+impl Default for DebugConfig {
+    fn default() -> Self {
+        Self {
+            chatmix_enabled: true,
+            chatmix_dry_run: false,
+            audio_session_polling_enabled: true,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

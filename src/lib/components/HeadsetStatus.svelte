@@ -16,6 +16,7 @@
 	);
 	let game = $derived(presence?.gameVolume ?? null);
 	let chat = $derived(presence?.chatVolume ?? null);
+	let connected = $derived(presence?.connected ?? false);
 	let hasChatMix = $derived(game !== null && chat !== null && game + chat > 0);
 	let chatMixPosition = $derived.by(() => {
 		if (game === null || chat === null || game + chat <= 0) return 50;
@@ -29,7 +30,9 @@
 		class="flex min-h-10.5 w-[min(100%,544px)] items-center gap-3 rounded-full border border-(--border) bg-(--surface) py-1.5 pr-3.5 pl-2.5"
 	>
 		<div
-			class="relative flex h-6 w-10.5 shrink-0 items-stretch rounded-md border border-(--border-strong) p-0.75"
+			class={`relative flex h-6 w-10.5 shrink-0 items-stretch rounded-md border border-(--border-strong) p-0.75 transition-opacity ${
+				connected ? 'opacity-100' : 'opacity-55'
+			}`}
 			role="meter"
 			aria-label="Battery"
 			aria-valuemin="0"
@@ -41,15 +44,23 @@
 				class="absolute top-1/2 -right-1.25 h-3 w-1 -translate-y-1/2 rounded-r-[3px] bg-(--border-strong)"
 				aria-hidden="true"
 			></span>
-			<span class="h-full rounded-[3px] bg-(--ok)" style={`width: ${batteryFill}%`}
+			<span
+				class={`h-full rounded-[3px] ${connected ? 'bg-(--ok)' : 'bg-(--text-muted)'}`}
+				style={`width: ${batteryFill}%`}
 			></span>
 			<strong
-				class="absolute top-1/2 left-1/2 z-1 -translate-x-1/2 -translate-y-1/2 text-[11px] leading-none font-bold text-(--accent-contrast) [text-shadow:0_1px_2px_rgba(0,0,0,0.35)] pb-px"
+				class={`absolute top-1/2 left-1/2 z-1 -translate-x-1/2 -translate-y-1/2 pb-px text-[11px] leading-none font-bold [text-shadow:0_1px_2px_rgba(0,0,0,0.35)] ${
+					connected ? 'text-(--accent-contrast)' : 'text-(--surface)'
+				}`}
 			>
 				{batteryLabel}
 			</strong>
 		</div>
-		<div class="grid min-w-0 w-full grid-cols-[20px_minmax(180px,1fr)_20px] items-center gap-2.25 text-(--text-soft)">
+		<div
+			class={`grid min-w-0 w-full grid-cols-[20px_minmax(180px,1fr)_20px] items-center gap-2.25 text-(--text-soft) transition-opacity ${
+				connected ? 'opacity-100' : 'opacity-45 grayscale'
+			}`}
+		>
 			<span class="inline-flex h-5 w-5 items-center justify-center text-(--text-muted)" title="Game">
 				<Gamepad2 size={16} strokeWidth={2.2} aria-hidden="true" />
 				<span class="sr-only">Game</span>

@@ -18,7 +18,9 @@
         "minWidth": 760,
         "minHeight": 560,
         "visible": false,
-        "decorations": false
+        "decorations": false,
+        "theme": "Dark",
+        "backgroundColor": [27, 29, 32, 255]
       }
     ],
     "security": {

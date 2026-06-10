@@ -16,6 +16,7 @@
 	"dependencies": {
 		"@lucide/svelte": "^1.17.0",
 		"@tauri-apps/api": "^2.0.0",
+		"@tauri-apps/plugin-autostart": "^2.5.1",
 		"svelte-dnd-action": "^0.9.69"
 	},
 	"devDependencies": {

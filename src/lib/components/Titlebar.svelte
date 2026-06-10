@@ -40,9 +40,21 @@
 	<div class="mr-auto ml-3 flex items-center gap-3">
 		{#if native.config}
 			<label class="switch-control" title="Autoswitch">
+				<span>Autoswitch</span>
 				<input
 					bind:checked={native.config.autoswitchEnabled}
 					onchange={native.persistAndApply}
+					type="checkbox"
+				/>
+				<span class="switch-track" aria-hidden="true">
+					<span class="switch-thumb"></span>
+				</span>
+			</label>
+			<label class="switch-control" title="Launch at startup">
+				<span>Startup</span>
+				<input
+					checked={native.launchAtStartup}
+					onchange={(event) => native.setLaunchAtStartup(event.currentTarget.checked)}
 					type="checkbox"
 				/>
 				<span class="switch-track" aria-hidden="true">

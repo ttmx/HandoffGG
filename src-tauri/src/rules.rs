@@ -83,6 +83,7 @@ mod tests {
                 priorities: vec![pref("headset-mic", false), pref("fallback-mic", false)],
             },
             chatmix: Default::default(),
+            debug: Default::default(),
         }
     }
 

@@ -54,6 +54,35 @@
 				<span class="inline-block transition-transform group-open:rotate-90">▸</span>
 				Debug
 			</summary>
+			<section class="mb-6 grid gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
+				<label class="m-0 flex items-center justify-between gap-3 text-[13px] font-semibold text-[var(--text-soft)]">
+					<span>ChatMix writes</span>
+					<input
+						class="h-4 w-4 accent-[var(--accent)]"
+						type="checkbox"
+						bind:checked={native.config.debug.chatmixEnabled}
+						onchange={native.saveAndSyncChatMix}
+					/>
+				</label>
+				<label class="m-0 flex items-center justify-between gap-3 text-[13px] font-semibold text-[var(--text-soft)]">
+					<span>ChatMix dry run</span>
+					<input
+						class="h-4 w-4 accent-[var(--accent)]"
+						type="checkbox"
+						bind:checked={native.config.debug.chatmixDryRun}
+						onchange={native.saveAndSyncChatMix}
+					/>
+				</label>
+				<label class="m-0 flex items-center justify-between gap-3 text-[13px] font-semibold text-[var(--text-soft)]">
+					<span>App session polling while settings is open</span>
+					<input
+						class="h-4 w-4 accent-[var(--accent)]"
+						type="checkbox"
+						bind:checked={native.config.debug.audioSessionPollingEnabled}
+						onchange={native.save}
+					/>
+				</label>
+			</section>
 			<HidStatus presence={native.presence} />
 			<DiagnosticsLog diagnostics={native.diagnostics} />
 		</details>

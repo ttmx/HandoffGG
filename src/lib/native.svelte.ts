@@ -1,6 +1,7 @@
 import { invoke as apiInvoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from '@tauri-apps/plugin-autostart';
 
 export type EndpointFlow = 'render' | 'capture';
 export type EndpointState = 'active' | 'disabled' | 'notPresent' | 'unplugged' | 'unknown';
@@ -33,6 +34,13 @@ export type AppConfig = {
 	output: FlowConfig;
 	input: FlowConfig;
 	chatmix: ChatMixConfig;
+	debug: DebugConfig;
+};
+
+export type DebugConfig = {
+	chatmixEnabled: boolean;
+	chatmixDryRun: boolean;
+	audioSessionPollingEnabled: boolean;
 };
 
 export type ChatMixRoute = 'game' | 'chat';
@@ -158,6 +166,7 @@ class NativeBridge {
 	error = $state('');
 	saved = $state(false);
 	accentColor = $state(FALLBACK_ACCENT);
+	launchAtStartup = $state(false);
 
 	outputEndpoints = $derived(this.endpoints.filter((endpoint) => endpoint.flow === 'render'));
 	inputEndpoints = $derived(this.endpoints.filter((endpoint) => endpoint.flow === 'capture'));
@@ -172,7 +181,11 @@ class NativeBridge {
 	 */
 	start = async (): Promise<() => void> => {
 		const unlisten = await listen(STATE_CHANGED_EVENT, this.refreshLiveState);
-		const sessionTimer = setInterval(this.refreshLiveState, 3000);
+		const sessionTimer = setInterval(() => {
+			if (this.config?.debug.audioSessionPollingEnabled) {
+				this.refreshAudioSessions();
+			}
+		}, 3000);
 		// The system accent can change while the app runs; the user has to leave the
 		// window to change it, so refetching on focus keeps us in sync without polling.
 		const unfocus = await getCurrentWindow().onFocusChanged(({ payload: focused }) => {
@@ -181,12 +194,21 @@ class NativeBridge {
 				this.refreshLiveState();
 			}
 		});
-		await Promise.all([this.refreshAll(), this.loadAccent()]);
+		await Promise.all([this.refreshAll(), this.loadAccent(), this.refreshLaunchAtStartup()]);
+		await this.settingsReady();
 		return () => {
 			clearInterval(sessionTimer);
 			unlisten();
 			unfocus();
 		};
+	};
+
+	settingsReady = async (): Promise<void> => {
+		try {
+			await apiInvoke('settings_ready');
+		} catch (err) {
+			this.error = String(err);
+		}
 	};
 
 	loadAccent = async (): Promise<void> => {
@@ -195,6 +217,14 @@ class NativeBridge {
 			this.accentColor = accent ?? FALLBACK_ACCENT;
 		} catch {
 			this.accentColor = FALLBACK_ACCENT;
+		}
+	};
+
+	refreshLaunchAtStartup = async (): Promise<void> => {
+		try {
+			this.launchAtStartup = await isAutostartEnabled();
+		} catch (err) {
+			this.error = String(err);
 		}
 	};
 
@@ -223,14 +253,24 @@ class NativeBridge {
 
 	refreshLiveState = async (): Promise<void> => {
 		try {
-			const [nextPresence, nextDiagnostics, nextSessions] = await Promise.all([
+			const [nextEndpoints, nextPresence, nextDiagnostics, nextSessions] = await Promise.all([
+				apiInvoke<AudioEndpoint[]>('list_endpoints'),
 				apiInvoke<PresenceSnapshot>('get_presence'),
 				apiInvoke<DiagnosticEvent[]>('get_diagnostics'),
 				apiInvoke<AudioSession[]>('list_audio_sessions'),
 			]);
+			this.endpoints = nextEndpoints;
 			this.presence = nextPresence;
 			this.diagnostics = nextDiagnostics.reverse();
 			this.audioSessions = nextSessions;
+		} catch (err) {
+			this.error = String(err);
+		}
+	};
+
+	refreshAudioSessions = async (): Promise<void> => {
+		try {
+			this.audioSessions = await apiInvoke<AudioSession[]>('list_audio_sessions');
 		} catch (err) {
 			this.error = String(err);
 		}
@@ -245,6 +285,16 @@ class NativeBridge {
 			this.saved = true;
 			clearTimeout(this.#savedTimer);
 			this.#savedTimer = setTimeout(() => (this.saved = false), 1600);
+		} catch (err) {
+			this.error = String(err);
+		}
+	};
+
+	saveAndSyncChatMix = async (): Promise<void> => {
+		await this.save();
+		try {
+			await apiInvoke('sync_chatmix_now');
+			await this.refreshLiveState();
 		} catch (err) {
 			this.error = String(err);
 		}
@@ -284,6 +334,18 @@ class NativeBridge {
 			await this.refreshLiveState();
 		} catch (err) {
 			this.error = String(err);
+		}
+	};
+
+	setLaunchAtStartup = async (enabled: boolean): Promise<void> => {
+		this.error = '';
+		try {
+			if (enabled) await enableAutostart();
+			else await disableAutostart();
+			this.launchAtStartup = await isAutostartEnabled();
+		} catch (err) {
+			this.error = String(err);
+			this.launchAtStartup = await isAutostartEnabled().catch(() => this.launchAtStartup);
 		}
 	};
 }

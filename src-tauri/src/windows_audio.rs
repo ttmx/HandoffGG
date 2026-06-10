@@ -2,23 +2,28 @@ use crate::audio::AudioBackend;
 use crate::chatmix::{app_id_for_session, route_for_app};
 use crate::models::{AudioEndpoint, AudioSession, ChatMixConfig, EndpointFlow, EndpointState};
 use anyhow::Context;
-use windows::core::{Interface, GUID, PCWSTR, PWSTR};
+use std::sync::mpsc::Sender;
+use std::thread;
+use std::time::Duration;
+use windows::core::{implement, Interface, GUID, PCWSTR, PWSTR};
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Foundation::{CloseHandle, BOOL};
 use windows::Win32::Media::Audio::{
     eCapture, eCommunications, eConsole, eMultimedia, eRender, EDataFlow, ERole,
     IAudioSessionControl2, IAudioSessionManager2, IMMDevice, IMMDeviceEnumerator,
-    ISimpleAudioVolume, MMDeviceEnumerator, DEVICE_STATE_ACTIVE, DEVICE_STATE_DISABLED,
-    DEVICE_STATE_NOTPRESENT, DEVICE_STATE_UNPLUGGED,
+    IMMNotificationClient, IMMNotificationClient_Impl, ISimpleAudioVolume, MMDeviceEnumerator,
+    DEVICE_STATE, DEVICE_STATE_ACTIVE, DEVICE_STATE_DISABLED, DEVICE_STATE_NOTPRESENT,
+    DEVICE_STATE_UNPLUGGED,
 };
 use windows::Win32::System::Com::StructuredStorage::PropVariantClear;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
-    COINIT_APARTMENTTHREADED, STGM_READ,
+    COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED, STGM_READ,
 };
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
+use windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY;
 
 pub struct WindowsAudioBackend;
 
@@ -107,6 +112,90 @@ impl AudioBackend for WindowsAudioBackend {
             }
             anyhow::bail!("Audio session was not found");
         })
+    }
+}
+
+pub fn start_endpoint_notification_listener(tx: Sender<()>) {
+    thread::spawn(move || {
+        if let Err(error) = endpoint_notification_loop(tx) {
+            eprintln!("audio endpoint notification listener stopped: {error}");
+        }
+    });
+}
+
+fn endpoint_notification_loop(tx: Sender<()>) -> anyhow::Result<()> {
+    unsafe {
+        CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
+    }
+    let result = (|| {
+        let enumerator = device_enumerator()?;
+        let callback: IMMNotificationClient = EndpointNotificationClient { tx }.into();
+        unsafe {
+            enumerator
+                .RegisterEndpointNotificationCallback(&callback)
+                .context("failed to register endpoint notification callback")?;
+        }
+
+        loop {
+            thread::park_timeout(Duration::from_secs(3600));
+        }
+    })();
+    unsafe {
+        CoUninitialize();
+    }
+    result
+}
+
+#[implement(IMMNotificationClient)]
+struct EndpointNotificationClient {
+    tx: Sender<()>,
+}
+
+#[allow(non_snake_case)]
+impl EndpointNotificationClient {
+    fn notify(&self) {
+        let _ = self.tx.send(());
+    }
+}
+
+#[allow(non_snake_case)]
+impl IMMNotificationClient_Impl for EndpointNotificationClient_Impl {
+    fn OnDeviceStateChanged(
+        &self,
+        _pwstrdeviceid: &PCWSTR,
+        _dwnewstate: DEVICE_STATE,
+    ) -> windows::core::Result<()> {
+        windows_core::IUnknownImpl::get_impl(self).notify();
+        Ok(())
+    }
+
+    fn OnDeviceAdded(&self, _pwstrdeviceid: &PCWSTR) -> windows::core::Result<()> {
+        windows_core::IUnknownImpl::get_impl(self).notify();
+        Ok(())
+    }
+
+    fn OnDeviceRemoved(&self, _pwstrdeviceid: &PCWSTR) -> windows::core::Result<()> {
+        windows_core::IUnknownImpl::get_impl(self).notify();
+        Ok(())
+    }
+
+    fn OnDefaultDeviceChanged(
+        &self,
+        _flow: EDataFlow,
+        _role: ERole,
+        _pwstrdefaultdeviceid: &PCWSTR,
+    ) -> windows::core::Result<()> {
+        windows_core::IUnknownImpl::get_impl(self).notify();
+        Ok(())
+    }
+
+    fn OnPropertyValueChanged(
+        &self,
+        _pwstrdeviceid: &PCWSTR,
+        _key: &PROPERTYKEY,
+    ) -> windows::core::Result<()> {
+        windows_core::IUnknownImpl::get_impl(self).notify();
+        Ok(())
     }
 }
 

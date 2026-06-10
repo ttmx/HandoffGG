@@ -20,14 +20,20 @@ use crate::rules::decide_switch;
 use parking_lot::Mutex;
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::window::Color;
+use tauri::{
+    AppHandle, Emitter, Manager, RunEvent, State, Theme, WebviewUrl, WebviewWindowBuilder,
+};
 
 const MAX_EVENTS: usize = 200;
+const WINDOW_BACKGROUND: Color = Color(0x1b, 0x1d, 0x20, 0xff);
 
 struct AppState {
     config_path: PathBuf,
@@ -37,6 +43,7 @@ struct AppState {
     chatmix: Mutex<ChatMixVolumeManager>,
     last_presence: Mutex<Option<PresenceSnapshot>>,
     diagnostics: Mutex<VecDeque<DiagnosticEvent>>,
+    settings_window_pending_show: AtomicBool,
 }
 
 type SharedState = Arc<AppState>;
@@ -44,6 +51,11 @@ type SharedState = Arc<AppState>;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .app_name("HandoffGG")
+                .build(),
+        )
         .setup(|app| {
             let config_path = config_path(app.handle())?;
             let loaded_config = config::load(&config_path).unwrap_or_else(|error| {
@@ -59,11 +71,13 @@ pub fn run() {
                 chatmix: Mutex::new(ChatMixVolumeManager::default()),
                 last_presence: Mutex::new(None),
                 diagnostics: Mutex::new(VecDeque::new()),
+                settings_window_pending_show: AtomicBool::new(false),
             });
 
             push_event(&state, DiagnosticEvent::info("HandoffGG started"));
             app.manage(state.clone());
             build_tray(app.handle())?;
+            start_audio_device_monitor(app.handle().clone(), state.clone());
             start_monitor(app.handle().clone(), state);
             Ok(())
         })
@@ -75,21 +89,22 @@ pub fn run() {
             get_presence,
             get_diagnostics,
             apply_now,
+            sync_chatmix_now,
             set_autoswitch_enabled,
             set_app_chatmix_route,
             open_settings,
+            settings_ready,
             get_accent_color
         ])
-        .on_window_event(|window, event| {
-            // This is a tray app: closing the window hides it to the tray rather
-            // than destroying it, so the tray's "Open settings" can reopen it.
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+        .build(tauri::generate_context!())
+        .expect("error while building HandoffGG")
+        .run(|_, event| {
+            if let RunEvent::ExitRequested { api, code, .. } = event {
+                if code.is_none() {
+                    api.prevent_exit();
+                }
             }
-        })
-        .run(tauri::generate_context!())
-        .expect("error while running HandoffGG");
+        });
 }
 
 #[tauri::command]
@@ -181,7 +196,7 @@ fn set_app_chatmix_route(
     *state.config.lock() = config.clone();
 
     if let Some(presence) = state.last_presence.lock().clone() {
-        if let Err(error) = sync_chatmix(&state, &presence) {
+        if let Err(error) = sync_chatmix(&state, &presence, "route_change") {
             push_event(
                 &state,
                 DiagnosticEvent::warn(format!("ChatMix apply failed: {error}")),
@@ -199,8 +214,33 @@ fn open_settings(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn settings_ready(app: AppHandle, state: State<'_, SharedState>) -> Result<(), String> {
+    if !state
+        .settings_window_pending_show
+        .swap(false, Ordering::SeqCst)
+    {
+        return Ok(());
+    }
+
+    if let Some(window) = app.get_webview_window("main") {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
 fn get_accent_color() -> Option<String> {
     theme::accent_color()
+}
+
+#[tauri::command]
+fn sync_chatmix_now(state: State<'_, SharedState>) -> Result<(), String> {
+    let Some(presence) = state.last_presence.lock().clone() else {
+        return Ok(());
+    };
+    sync_chatmix(&state, &presence, "manual_debug").map_err(|error| error.to_string())
 }
 
 fn start_monitor(app: AppHandle, state: SharedState) {
@@ -217,21 +257,57 @@ fn start_monitor(app: AppHandle, state: SharedState) {
                 .lock()
                 .wait_for_event(Duration::from_millis(1_000))
             else {
-                if let Some(presence) = state.last_presence.lock().clone() {
-                    if let Err(error) = sync_chatmix(&state, &presence) {
-                        push_event(
-                            &state,
-                            DiagnosticEvent::warn(format!("ChatMix apply failed: {error}")),
-                        );
-                        let _ = app.emit("autoswapper://state-changed", now_ms());
-                    }
-                }
                 continue;
             };
             process_snapshot(&app, &state, snapshot, &mut stable_connected);
         }
     });
 }
+
+#[cfg(windows)]
+fn start_audio_device_monitor(app: AppHandle, state: SharedState) {
+    let (tx, rx) = mpsc::channel();
+    crate::windows_audio::start_endpoint_notification_listener(tx);
+    thread::spawn(move || {
+        while rx.recv().is_ok() {
+            while rx.recv_timeout(Duration::from_millis(200)).is_ok() {}
+
+            let presence = state.last_presence.lock().clone();
+            let connected = presence.as_ref().map(|p| p.connected).unwrap_or(false);
+            let has_status = presence
+                .as_ref()
+                .map(|p| p.has_connection_status)
+                .unwrap_or(false);
+
+            match decide_current(&state, connected, has_status)
+                .and_then(|decision| apply_decision(&state, &decision).map(|()| decision))
+            {
+                Ok(decision) => push_event(
+                    &state,
+                    DiagnosticEvent::info(format!("Audio device change: {}", decision.reason)),
+                ),
+                Err(error) => push_event(
+                    &state,
+                    DiagnosticEvent::warn(format!("Audio device refresh failed: {error}")),
+                ),
+            }
+
+            if let Some(presence) = presence {
+                if let Err(error) = sync_chatmix(&state, &presence, "audio_device") {
+                    push_event(
+                        &state,
+                        DiagnosticEvent::warn(format!("ChatMix apply failed: {error}")),
+                    );
+                }
+            }
+
+            let _ = app.emit("autoswapper://state-changed", now_ms());
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn start_audio_device_monitor(_app: AppHandle, _state: SharedState) {}
 
 fn process_snapshot(
     app: &AppHandle,
@@ -253,7 +329,7 @@ fn process_snapshot(
     let connection_changed = merged_snapshot.has_connection_status
         && *stable_connected != Some(merged_snapshot.connected);
     *state.last_presence.lock() = Some(merged_snapshot.clone());
-    if let Err(error) = sync_chatmix(state, &merged_snapshot) {
+    if let Err(error) = sync_chatmix(state, &merged_snapshot, "hid_event") {
         push_event(
             state,
             DiagnosticEvent::warn(format!("ChatMix apply failed: {error}")),
@@ -314,7 +390,11 @@ fn handle_presence_snapshot(
 ) {
     let connected = snapshot.connected;
     *state.last_presence.lock() = Some(snapshot.clone());
-    if let Err(error) = sync_chatmix(state, &snapshot) {
+    if let Err(error) = sync_chatmix(
+        state,
+        &snapshot,
+        if initial { "initial" } else { "presence" },
+    ) {
         push_event(
             state,
             DiagnosticEvent::warn(format!("ChatMix apply failed: {error}")),
@@ -373,7 +453,22 @@ fn decide_current(
     let endpoints = state.audio.endpoints()?;
     let (render, capture) = available_ids(&endpoints, headset_connected, has_status);
     let config = state.config.lock().clone();
-    Ok(decide_switch(&config, &render, &capture))
+    let mut decision = decide_switch(&config, &render, &capture);
+    let original_action_count = decision.actions.len();
+    decision.actions.retain(|action| match action {
+        DecisionAction::SetRenderDefault { endpoint_id } => {
+            !is_default_for_all_roles(&endpoints, endpoint_id, EndpointFlow::Render)
+        }
+        DecisionAction::SetCaptureDefault { endpoint_id } => {
+            !is_default_for_all_roles(&endpoints, endpoint_id, EndpointFlow::Capture)
+        }
+    });
+
+    if original_action_count > 0 && decision.actions.is_empty() {
+        decision.reason = format!("{}; already default", decision.reason);
+    }
+
+    Ok(decision)
 }
 
 /// An endpoint is available when it is Active and — for presence-tracked devices
@@ -406,11 +501,19 @@ fn apply_decision(state: &AppState, decision: &SwitchDecision) -> anyhow::Result
     for action in &decision.actions {
         match action {
             DecisionAction::SetRenderDefault { endpoint_id } => {
+                push_event(
+                    state,
+                    DiagnosticEvent::info(format!("Setting render default: {endpoint_id}")),
+                );
                 state
                     .audio
                     .set_default(endpoint_id, crate::models::EndpointFlow::Render)?;
             }
             DecisionAction::SetCaptureDefault { endpoint_id } => {
+                push_event(
+                    state,
+                    DiagnosticEvent::info(format!("Setting capture default: {endpoint_id}")),
+                );
                 state
                     .audio
                     .set_default(endpoint_id, crate::models::EndpointFlow::Capture)?;
@@ -420,19 +523,66 @@ fn apply_decision(state: &AppState, decision: &SwitchDecision) -> anyhow::Result
     Ok(())
 }
 
-fn sync_chatmix(state: &AppState, presence: &PresenceSnapshot) -> anyhow::Result<()> {
+fn is_default_for_all_roles(
+    endpoints: &[AudioEndpoint],
+    endpoint_id: &str,
+    flow: EndpointFlow,
+) -> bool {
+    endpoints
+        .iter()
+        .find(|endpoint| endpoint.id == endpoint_id && endpoint.flow == flow)
+        .map(|endpoint| {
+            endpoint.is_default_console
+                && endpoint.is_default_multimedia
+                && endpoint.is_default_communications
+        })
+        .unwrap_or(false)
+}
+
+fn sync_chatmix(state: &AppState, presence: &PresenceSnapshot, reason: &str) -> anyhow::Result<()> {
     let config = state.config.lock().clone();
     let sessions = state.audio.render_sessions(&config.chatmix)?;
-    let changes = state.chatmix.lock().sync(
-        &sessions,
-        presence.connected && presence.has_connection_status,
-        presence.game_volume,
-        presence.chat_volume,
-    );
+    let changes = if config.debug.chatmix_enabled {
+        state.chatmix.lock().sync(
+            &sessions,
+            presence.connected && presence.has_connection_status,
+            presence.game_volume,
+            presence.chat_volume,
+        )
+    } else {
+        state.chatmix.lock().sync(&sessions, false, None, None)
+    };
     for change in changes {
-        state
-            .audio
-            .set_session_volume(&change.session_id, change.volume)?;
+        let session = sessions
+            .iter()
+            .find(|session| session.id == change.session_id);
+        let app = session
+            .map(|session| session.display_name.as_str())
+            .unwrap_or("unknown session");
+        let old_volume = session.map(|session| session.volume).unwrap_or_default();
+        let route = session
+            .map(|session| format!("{:?}", session.route))
+            .unwrap_or_else(|| "Unknown".to_string());
+        let mode = if config.debug.chatmix_enabled {
+            "ChatMix"
+        } else {
+            "ChatMix disabled restore"
+        };
+        let message = format!(
+            "{mode} {reason}: {app} {route} {:.0}% -> {:.0}% (game={:?}, chat={:?})",
+            old_volume * 100.0,
+            change.volume * 100.0,
+            presence.game_volume,
+            presence.chat_volume
+        );
+        if config.debug.chatmix_dry_run {
+            push_event(state, DiagnosticEvent::info(format!("dry-run {message}")));
+        } else {
+            push_event(state, DiagnosticEvent::info(message));
+            state
+                .audio
+                .set_session_volume(&change.session_id, change.volume)?;
+        }
     }
     Ok(())
 }
@@ -458,18 +608,22 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &quit])?;
 
-    TrayIconBuilder::new()
+    let mut tray = TrayIconBuilder::new()
         .tooltip("HandoffGG")
         .menu(&menu)
-        .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "open" => {
-                let _ = show_main_window(app);
-            }
-            "quit" => app.exit(0),
-            _ => {}
-        })
-        .build(app)?;
+        .show_menu_on_left_click(true);
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+
+    tray.on_menu_event(|app, event| match event.id.as_ref() {
+        "open" => {
+            let _ = show_main_window(app);
+        }
+        "quit" => app.exit(0),
+        _ => {}
+    })
+    .build(app)?;
 
     Ok(())
 }
@@ -478,6 +632,21 @@ fn show_main_window(app: &AppHandle) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window("main") {
         window.show()?;
         window.set_focus()?;
+    } else {
+        if let Some(state) = app.try_state::<SharedState>() {
+            state
+                .settings_window_pending_show
+                .store(true, Ordering::SeqCst);
+        }
+        WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+            .title("HandoffGG")
+            .inner_size(983.0, 667.0)
+            .min_inner_size(760.0, 560.0)
+            .decorations(false)
+            .theme(Some(Theme::Dark))
+            .background_color(WINDOW_BACKGROUND)
+            .visible(false)
+            .build()?;
     }
     Ok(())
 }
