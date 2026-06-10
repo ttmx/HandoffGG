@@ -141,6 +141,7 @@ export type AudioSession = {
 export type DiagnosticEvent = {
 	timestampMs: number;
 	level: string;
+	category: string;
 	message: string;
 };
 

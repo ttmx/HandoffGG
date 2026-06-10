@@ -50,6 +50,39 @@ Relevant interrupt endpoints from the pcap:
 0x86  control-side input reports, including 45, 52, B9, and B7 reports
 ```
 
+## Frame Layout (authoritative)
+
+Earlier notes reverse-engineered the reports from pcaps and parsed them by *scanning*
+for a known opcode byte. That is fragile: opcode bytes collide with value bytes (a 69%
+battery is `0x45`, the ChatMix opcode; 82% is `0x52`, the mute opcode), which produced
+a phantom `game=3, chat=100` wheel event. The layout below was instead confirmed
+directly from the device's **HID report descriptor** (`hid_get_report_descriptor`) plus
+raw reads captured live on both interfaces.
+
+**Wireshark vs hidapi.** A Wireshark USB capture shows the transport layer — the URB
+header (~27 bytes), and for the `0xB0` poll the control-transfer setup stage (which is
+where the report-ID lives, inside `wValue`). `hidapi` strips all of that; our code only
+ever sees the HID **report payload**. So reason about offsets from the hidapi buffer,
+not the Wireshark frame.
+
+**These reports are unnumbered.** hidapi delivers the opcode at byte 0 on both MI_03
+and MI_05 — there is no report-ID byte (the Windows stack may prepend a single `0x00`,
+which we strip; none of our opcodes are `0x00`). All reports are 64 bytes, zero-padded.
+Fixed offsets from the opcode at index 0:
+
+```text
+0xB0 status  (MI_03):  +2 battery%   +3 connection/charge (00 off, 01 charging, 03 on battery)   +4 game   +5 chat
+0xB9 power   (MI_05):  +1 connection (02 off, 03 on)
+0x45 chatmix (MI_05):  +1 game       +2 chat              (each 0..=100, 0x64 = max)
+0x52 mute    (MI_05):  +2 muted      (00 unmuted, 01 muted)
+0xB7 battery (MI_05):  +1 battery%
+```
+
+Parsing lives in `src-tauri/src/hid_report.rs`: the byte layout is decoded with the
+`deku` derive at these fixed offsets, then device semantics (state byte → bool, range
+checks) are applied. Because fields are read at fixed positions, a value byte can never
+be mistaken for an opcode — the collision class above is structurally impossible.
+
 ## Initial Status Query
 
 Send the output report:
@@ -72,24 +105,12 @@ B0 03 58 03 64 64 ...
 B0 02 58 00 64 64 ...
 ```
 
-Current parser rule:
-
-- Find byte `B0`.
-- Read connection/charging status at `B0 + 3`.
-- Read battery percent at `B0 + 2`.
-- Interpret:
-  - `0x00` = headset disconnected/off
-  - `0x01` = connected and charging
-  - `0x03` = connected and discharging
-
-The `B0` report also includes ChatMix-like values at:
-
-```text
-B0 + 4  game
-B0 + 5  chat
-```
-
-These are useful as an initial/fallback value, but live ChatMix movement is better represented by `45` reports.
+Parser rule: see [Frame Layout (authoritative)](#frame-layout-authoritative). The
+`0xB0` reply carries connection/charge at `+3`, battery at `+2`, and the ChatMix wheel
+position at `+4` (game) / `+5` (chat). The wheel position is read from this reply to
+seed the state from the initial query and from the active re-query issued when the
+headset connects — the dongle only pushes the wheel position unsolicited (`45` reports)
+when it actually moves, so a fresh connect would otherwise have no value.
 
 ## PCAP Sections
 
@@ -139,14 +160,18 @@ Examples from the pcap:
 45 64 56 ...
 ```
 
-Current parser rule:
+Parser rule: opcode `45` at offset 0, then `+1` = game, `+2` = chat (both `0..=100`).
+See [Frame Layout (authoritative)](#frame-layout-authoritative). ChatMix is displayed
+and drives the per-app volume scaling; it is not an audio-routing signal.
 
-- Find byte `45`.
-- Read:
-  - `45 + 1` = game value
-  - `45 + 2` = chat value
-- Store both values for diagnostics/UI only.
-- Do not make any audio-routing decision from ChatMix in V1.
+> **Opcode collision (historical).** Opcodes share the byte space with value bytes: a
+> 69% battery is `0x45` (the ChatMix opcode), 82% is `0x52` (the mute opcode). The old
+> parser scanned the whole report for an opcode, so it matched the *battery byte* of a
+> `B0` status report and misparsed its neighbours — a phantom `game=3, chat=100` wheel
+> event at startup when the battery sat at 69%. The current fixed-offset parser
+> (`hid_report.rs`, via `deku`) reads each field at a known position, so this is
+> structurally impossible. The Wireshark dissector's `find_opcode` likewise restricts
+> to offsets 0/1.
 
 Earlier parser mistake:
 
@@ -171,15 +196,8 @@ Examples from the pcap:
 52 00 01 ...
 ```
 
-Current parser rule:
-
-- Find byte `52`.
-- Read mute status at `52 + 2`.
-- Interpret:
-  - `0x00` = unmuted
-  - `0x01` = muted
-
-This should be validated with more live toggles, but it matches the current capture better than the old `45` parser.
+Parser rule: opcode `52` at offset 0, mute status at `+2` (`0x00` unmuted, `0x01`
+muted). See [Frame Layout (authoritative)](#frame-layout-authoritative).
 
 ## Connection Reports
 
@@ -248,30 +266,18 @@ Autoswitch:
 
 ## Tests Added
 
-Parser tests currently cover:
-
-- disconnected `B0` report with HID report ID
-- disconnected `B0` event without HID report ID
-- connected/discharging `B0` report with HID report ID
-- connected/discharging `B0` event without HID report ID
-- connected/charging `B0` report
-- unknown connection status
-- connected `B9 03` power event
-- disconnected `B9 02` power event
-- battery from `B7 4B`
-- ChatMix from `B0`
-- ChatMix from `45`
-- muted from `52 00 01`
-- unmuted from `52 00 00`
-- confirmation that `45` ChatMix reports are not parsed as mic mute
+Parser tests live in `src-tauri/src/hid_report.rs` and run against frames captured
+live from the dongle. They cover power on/off (`B9`), mute toggle (`52`), the ChatMix
+wheel sweep (`45`), connected and disconnected status (`B0`), battery (`B7`), the
+leading report-ID strip, unknown opcode/state rejection, and — as regressions — the
+69% (`0x45`) and 82% (`0x52`) battery levels that the old scanning parser misread as
+ChatMix/mute opcodes.
 
 ## Caveats
 
-- HID interface numbers and report shapes may vary across SteelSeries models and firmware versions.
-- `52` mute parsing is based on one pcap and should be validated live.
+- HID interface numbers and report shapes may vary across SteelSeries models and firmware versions. The fixed offsets here were confirmed on this dongle via `hid_get_report_descriptor` + live reads.
 - Listener threads currently open the HID devices once. Dongle unplug/replug or USB re-enumeration may require listener restart logic.
 - The UI only shows the latest raw response, so a fast sequence of reports can overwrite useful evidence. A report history panel would help further debugging.
-- ChatMix is displayed only; Autoswapper does not route or alter audio based on it.
 
 ## Useful References
 

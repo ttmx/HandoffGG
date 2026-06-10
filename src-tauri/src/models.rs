@@ -193,6 +193,9 @@ pub struct SwitchDecision {
 pub struct DiagnosticEvent {
     pub timestamp_ms: u128,
     pub level: String,
+    /// Coarse grouping used by the diagnostics UI filter. "general" by default;
+    /// chatmix-related events use "chatmix" so they can be shown/hidden on their own.
+    pub category: String,
     pub message: String,
 }
 
@@ -201,6 +204,7 @@ impl DiagnosticEvent {
         Self {
             timestamp_ms: now_ms(),
             level: "info".to_string(),
+            category: "general".to_string(),
             message: message.into(),
         }
     }
@@ -209,8 +213,15 @@ impl DiagnosticEvent {
         Self {
             timestamp_ms: now_ms(),
             level: "warn".to_string(),
+            category: "general".to_string(),
             message: message.into(),
         }
+    }
+
+    /// Tag this event with a category (e.g. "chatmix") for UI filtering.
+    pub fn category(mut self, category: impl Into<String>) -> Self {
+        self.category = category.into();
+        self
     }
 }
 

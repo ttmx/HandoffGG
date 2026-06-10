@@ -1,3 +1,4 @@
+use crate::hid_report::HidReport;
 use crate::models::{now_ms, PresenceSnapshot};
 use hidapi::{DeviceInfo, HidApi, HidDevice};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -7,6 +8,11 @@ use std::time::{Duration, Instant};
 pub trait HeadsetPresenceBackend: Send {
     fn snapshot(&mut self) -> PresenceSnapshot;
     fn wait_for_event(&mut self, timeout: Duration) -> Option<PresenceSnapshot>;
+
+    /// Actively re-query the status interface (the `0xB0` poll). The dongle does not
+    /// push the chatmix wheel position on connect — it only emits it unsolicited when
+    /// the wheel moves — so we read it back out of the status report on demand.
+    fn refresh_status(&mut self) -> PresenceSnapshot;
 }
 
 pub struct SteelSeriesHidPresenceBackend {
@@ -86,6 +92,10 @@ impl HeadsetPresenceBackend for SteelSeriesHidPresenceBackend {
             self.preferred_path = snapshot.device_path.clone();
         }
         snapshot
+    }
+
+    fn refresh_status(&mut self) -> PresenceSnapshot {
+        self.status_snapshot()
     }
 
     fn wait_for_event(&mut self, timeout: Duration) -> Option<PresenceSnapshot> {
@@ -229,37 +239,22 @@ fn query_status(device: HidDevice, device_path: String) -> PresenceSnapshot {
     }
 
     let raw_response = hex_bytes(&in_report[..read]);
-    let connected = match parse_connected(&in_report[..read]) {
-        Some(connected) => connected,
-        None => {
-            return PresenceSnapshot {
-                connected: false,
-                has_connection_status: false,
-                mic_muted: None,
-                battery_percent: None,
-                game_volume: None,
-                chat_volume: None,
-                raw_response: Some(raw_response),
-                device_path: Some(device_path),
-                error: Some("HID status response did not match Nova 7 parser".to_string()),
-                observed_at_ms: now_ms(),
-            }
+    match HidReport::parse(&in_report[..read]) {
+        Some(parsed @ HidReport::Status { .. }) => {
+            snapshot_from_report(parsed, raw_response, &device_path)
         }
-    };
-
-    let chatmix = parse_chatmix(&in_report[..read]);
-
-    PresenceSnapshot {
-        connected,
-        has_connection_status: true,
-        mic_muted: None,
-        battery_percent: parse_battery_percent(&in_report[..read]),
-        game_volume: chatmix.map(|chatmix| chatmix.0),
-        chat_volume: chatmix.map(|chatmix| chatmix.1),
-        raw_response: Some(raw_response),
-        device_path: Some(device_path),
-        error: None,
-        observed_at_ms: now_ms(),
+        _ => PresenceSnapshot {
+            connected: false,
+            has_connection_status: false,
+            mic_muted: None,
+            battery_percent: None,
+            game_volume: None,
+            chat_volume: None,
+            raw_response: Some(raw_response),
+            device_path: Some(device_path),
+            error: Some("HID status response did not match Nova 7 parser".to_string()),
+            observed_at_ms: now_ms(),
+        },
     }
 }
 
@@ -360,70 +355,63 @@ fn open_listener_device(spec: &ListenerSpec) -> Option<(HidDevice, String)> {
 }
 
 fn parse_event_snapshot(report: &[u8], device_path: &str) -> Option<PresenceSnapshot> {
-    let raw_response = hex_bytes(report);
+    let parsed = HidReport::parse(report)?;
+    Some(snapshot_from_report(parsed, hex_bytes(report), device_path))
+}
 
-    if let Some(connected) = parse_connected(report) {
-        let chatmix = parse_chatmix(report);
-        return Some(PresenceSnapshot {
+/// Map a decoded [`HidReport`] onto a partial [`PresenceSnapshot`]. Each report fills
+/// only the fields it carries; `merge_partial_snapshot` / `merge_presence_snapshot`
+/// stitch successive partials into the full picture.
+fn snapshot_from_report(
+    report: HidReport,
+    raw_response: String,
+    device_path: &str,
+) -> PresenceSnapshot {
+    let base = PresenceSnapshot {
+        connected: false,
+        has_connection_status: false,
+        mic_muted: None,
+        battery_percent: None,
+        game_volume: None,
+        chat_volume: None,
+        raw_response: Some(raw_response),
+        device_path: Some(device_path.to_string()),
+        error: None,
+        observed_at_ms: now_ms(),
+    };
+
+    match report {
+        HidReport::Status {
+            connected,
+            battery,
+            chatmix,
+        } => PresenceSnapshot {
+            connected: connected.unwrap_or(false),
+            has_connection_status: connected.is_some(),
+            battery_percent: battery,
+            game_volume: chatmix.map(|(game, _)| game),
+            chat_volume: chatmix.map(|(_, chat)| chat),
+            ..base
+        },
+        HidReport::Connection { connected } => PresenceSnapshot {
             connected,
             has_connection_status: true,
-            mic_muted: None,
-            battery_percent: parse_battery_percent(report),
-            game_volume: chatmix.map(|chatmix| chatmix.0),
-            chat_volume: chatmix.map(|chatmix| chatmix.1),
-            raw_response: Some(raw_response),
-            device_path: Some(device_path.to_string()),
-            error: None,
-            observed_at_ms: now_ms(),
-        });
+            ..base
+        },
+        HidReport::ChatMix { game, chat } => PresenceSnapshot {
+            game_volume: Some(game),
+            chat_volume: Some(chat),
+            ..base
+        },
+        HidReport::Mute { muted } => PresenceSnapshot {
+            mic_muted: Some(muted),
+            ..base
+        },
+        HidReport::Battery { percent } => PresenceSnapshot {
+            battery_percent: Some(percent),
+            ..base
+        },
     }
-
-    if let Some(chatmix) = parse_chatmix(report) {
-        return Some(PresenceSnapshot {
-            connected: false,
-            has_connection_status: false,
-            mic_muted: None,
-            battery_percent: None,
-            game_volume: Some(chatmix.0),
-            chat_volume: Some(chatmix.1),
-            raw_response: Some(raw_response),
-            device_path: Some(device_path.to_string()),
-            error: None,
-            observed_at_ms: now_ms(),
-        });
-    }
-
-    if let Some(mic_muted) = parse_mic_muted(report) {
-        return Some(PresenceSnapshot {
-            connected: false,
-            has_connection_status: false,
-            mic_muted: Some(mic_muted),
-            battery_percent: None,
-            game_volume: None,
-            chat_volume: None,
-            raw_response: Some(raw_response),
-            device_path: Some(device_path.to_string()),
-            error: None,
-            observed_at_ms: now_ms(),
-        });
-    }
-
-    if let Some(battery_percent) = parse_battery_percent(report) {
-        return Some(PresenceSnapshot {
-            connected: false,
-            has_connection_status: false,
-            mic_muted: None,
-            battery_percent: Some(battery_percent),
-            game_volume: None,
-            chat_volume: None,
-            raw_response: Some(raw_response),
-            device_path: Some(device_path.to_string()),
-            error: None,
-            observed_at_ms: now_ms(),
-        });
-    }
-
-    None
 }
 
 fn merge_partial_snapshot(
@@ -454,155 +442,4 @@ fn hex_bytes(bytes: &[u8]) -> String {
         .map(|byte| format!("{byte:02X}"))
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn parse_connected(report: &[u8]) -> Option<bool> {
-    if let Some(b9_index) = report.iter().position(|byte| *byte == 0xB9) {
-        return match *report.get(b9_index + 1)? {
-            0x02 => Some(false),
-            0x03 => Some(true),
-            _ => None,
-        };
-    }
-
-    let b0_index = report.iter().position(|byte| *byte == 0xB0)?;
-    match *report.get(b0_index + 3)? {
-        0x00 => Some(false),
-        0x01 | 0x03 => Some(true),
-        _ => None,
-    }
-}
-
-fn parse_chatmix(report: &[u8]) -> Option<(u8, u8)> {
-    if let Some(report_index) = report.iter().position(|byte| *byte == 0x45) {
-        return Some((
-            *report.get(report_index + 1)?,
-            *report.get(report_index + 2)?,
-        ));
-    }
-
-    let b0_index = report.iter().position(|byte| *byte == 0xB0)?;
-    Some((*report.get(b0_index + 4)?, *report.get(b0_index + 5)?))
-}
-
-fn parse_mic_muted(report: &[u8]) -> Option<bool> {
-    let report_index = report.iter().position(|byte| *byte == 0x52)?;
-    let mute_status = *report.get(report_index + 2)?;
-
-    match mute_status {
-        0x00 => Some(false),
-        0x01 => Some(true),
-        _ => None,
-    }
-}
-
-fn parse_battery_percent(report: &[u8]) -> Option<u8> {
-    let percent = if let Some(report_index) = report.iter().position(|byte| *byte == 0xB7) {
-        *report.get(report_index + 1)?
-    } else {
-        let b0_index = report.iter().position(|byte| *byte == 0xB0)?;
-        *report.get(b0_index + 2)?
-    };
-    (percent <= 100).then_some(percent)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{parse_battery_percent, parse_chatmix, parse_connected, parse_mic_muted};
-
-    #[test]
-    fn parses_nova_7_disconnected_report_with_hid_report_id() {
-        let report = [0x00, 0xB0, 0x02, 0x59, 0x00, 0x64, 0x64];
-        assert_eq!(parse_connected(&report), Some(false));
-    }
-
-    #[test]
-    fn parses_nova_7_disconnected_event_without_hid_report_id() {
-        let report = [0xB0, 0x02, 0x58, 0x00, 0x64, 0x64];
-        assert_eq!(parse_connected(&report), Some(false));
-    }
-
-    #[test]
-    fn parses_nova_7_discharging_report_with_hid_report_id() {
-        let report = [0x00, 0xB0, 0x03, 0x59, 0x03, 0x64, 0x64];
-        assert_eq!(parse_connected(&report), Some(true));
-    }
-
-    #[test]
-    fn parses_nova_7_discharging_event_without_hid_report_id() {
-        let report = [0xB0, 0x03, 0x58, 0x03, 0x64, 0x64];
-        assert_eq!(parse_connected(&report), Some(true));
-    }
-
-    #[test]
-    fn parses_nova_7_charging_report_with_hid_report_id() {
-        let report = [0x00, 0xB0, 0x01, 0x59, 0x01, 0x64, 0x64];
-        assert_eq!(parse_connected(&report), Some(true));
-    }
-
-    #[test]
-    fn returns_none_for_unknown_status() {
-        let report = [0x00, 0xB0, 0x01, 0x59, 0x02, 0x64, 0x64];
-        assert_eq!(parse_connected(&report), None);
-    }
-
-    #[test]
-    fn parses_nova_7_connected_power_event() {
-        let report = [0xB9, 0x03, 0x00, 0x00];
-        assert_eq!(parse_connected(&report), Some(true));
-    }
-
-    #[test]
-    fn parses_nova_7_disconnected_power_event() {
-        let report = [0xB9, 0x02, 0x00, 0x00];
-        assert_eq!(parse_connected(&report), Some(false));
-    }
-
-    #[test]
-    fn returns_none_for_unknown_power_event() {
-        let report = [0xB9, 0x04, 0x00, 0x00];
-        assert_eq!(parse_connected(&report), None);
-    }
-
-    #[test]
-    fn parses_chatmix_from_status_event() {
-        let report = [0xB0, 0x03, 0x58, 0x03, 0x63, 0x64];
-        assert_eq!(parse_chatmix(&report), Some((0x63, 0x64)));
-    }
-
-    #[test]
-    fn parses_chatmix_from_wheel_event() {
-        let report = [0x45, 0x64, 0x00];
-        assert_eq!(parse_chatmix(&report), Some((0x64, 0x00)));
-    }
-
-    #[test]
-    fn parses_mic_muted_from_mute_event() {
-        let report = [0x52, 0x00, 0x01];
-        assert_eq!(parse_mic_muted(&report), Some(true));
-    }
-
-    #[test]
-    fn parses_mic_unmuted_from_mute_event() {
-        let report = [0x52, 0x00, 0x00];
-        assert_eq!(parse_mic_muted(&report), Some(false));
-    }
-
-    #[test]
-    fn parses_battery_percent_event() {
-        let report = [0xB7, 0x4B, 0x00, 0x00];
-        assert_eq!(parse_battery_percent(&report), Some(75));
-    }
-
-    #[test]
-    fn parses_battery_percent_from_status_report() {
-        let report = [0x00, 0xB0, 0x02, 0x4C, 0x00, 0x64, 0x64];
-        assert_eq!(parse_battery_percent(&report), Some(76));
-    }
-
-    #[test]
-    fn does_not_parse_chatmix_as_mic_mute() {
-        let report = [0x45, 0x64, 0x1A];
-        assert_eq!(parse_mic_muted(&report), None);
-    }
 }

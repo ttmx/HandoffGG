@@ -7,11 +7,19 @@
 -- byte we cannot yet explain is surfaced under an "Unknown / undecoded" subtree and
 -- flagged with an expert "note" so it shows up in Analyze -> Expert Information.
 --
--- What we KNOW (confirmed by working parsers + unit tests in presence.rs):
+-- The Rust app parses these same reports at fixed offsets (src-tauri/src/hid_report.rs,
+-- via the `deku` crate), against the layout confirmed from the device's HID report
+-- descriptor. This dissector mirrors that layout. NOTE: Wireshark shows the USB
+-- transport (URB header, control-transfer setup); hidapi strips it, so the Rust buffer
+-- starts at the opcode while a USB capture does not — keep that in mind when comparing.
+--
+-- What we KNOW (confirmed by the report descriptor + unit tests in hid_report.rs):
 --   0xB0 status report:  byte+3 = connection/charge state
 --                                 (0x00 disconnected, 0x01 charging, 0x03 on battery)
 --                        byte+2 = battery percent (startup/status snapshot)
 --                        byte+4 = ChatMix "game" level, byte+5 = ChatMix "chat" level
+--                                 (bounded to 0..=100; the backend reads these from the
+--                                  active poll to seed the wheel state on connect)
 --   0x45 wheel event:    byte+1 = ChatMix "game", byte+2 = ChatMix "chat"
 --   0x52 mute event:     byte+2 = microphone muted (0x00 unmuted, 0x01 muted)
 --   0xB9 power event:    byte+1 = connection state (0x02 off, 0x03 on)
@@ -192,8 +200,22 @@ local function dissect(tvb, pinfo, tree)
 			known:add(f.connection, tvb(off + 3, 1))
 			info = "Status: " .. (CONN_NAMES[v] or string.format("unknown (0x%02X)", v))
 		end
-		if len > off + 4 then known:add(f.cm_game, tvb(off + 4, 1)) end
-		if len > off + 5 then known:add(f.cm_chat, tvb(off + 5, 1)) end
+		-- The wheel position lives at byte+4/+5 of the status response; the backend
+		-- only trusts it when both fall in 0..=100, so flag out-of-range values here.
+		if len > off + 4 then
+			if tvb(off + 4, 1):uint() <= 100 then
+				known:add(f.cm_game, tvb(off + 4, 1))
+			else
+				add_uncertain(known, tvb(off + 4, 1), "ChatMix game out of range (>100)")
+			end
+		end
+		if len > off + 5 then
+			if tvb(off + 5, 1):uint() <= 100 then
+				known:add(f.cm_chat, tvb(off + 5, 1))
+			else
+				add_uncertain(known, tvb(off + 5, 1), "ChatMix chat out of range (>100)")
+			end
+		end
 		pinfo.cols.info = info
 		add_unknown(root, tvb, off + 6)
 
