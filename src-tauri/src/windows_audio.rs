@@ -5,9 +5,9 @@ use anyhow::Context;
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
-use windows::core::{implement, Interface, GUID, PCWSTR, PWSTR};
+use windows::core::{Interface, GUID, PCWSTR, PWSTR};
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
-use windows::Win32::Foundation::{CloseHandle, BOOL};
+use windows::Win32::Foundation::{CloseHandle, PROPERTYKEY};
 use windows::Win32::Media::Audio::{
     eCapture, eCommunications, eConsole, eMultimedia, eRender, EDataFlow, ERole,
     IAudioSessionControl2, IAudioSessionManager2, IMMDevice, IMMDeviceEnumerator,
@@ -23,7 +23,8 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
-use windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY;
+use windows_implement::implement;
+use windows_core::BOOL;
 
 pub struct WindowsAudioBackend;
 

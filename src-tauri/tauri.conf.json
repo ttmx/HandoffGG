@@ -10,26 +10,13 @@
     "frontendDist": "../build"
   },
   "app": {
-    "windows": [
-      {
-        "title": "HandoffGG",
-        "width": 983,
-        "height": 667,
-        "minWidth": 760,
-        "minHeight": 560,
-        "visible": false,
-        "decorations": false,
-        "theme": "Dark",
-        "backgroundColor": [27, 29, 32, 255]
-      }
-    ],
     "security": {
       "csp": null
     }
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["msi"],
     "icon": ["icons/icon.ico"]
   }
 }
