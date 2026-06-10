@@ -30,9 +30,14 @@
 	});
 </script>
 
-<div class="titlebar" data-tauri-drag-region>
-	<span class="titlebar-title" data-tauri-drag-region>Autoswapper</span>
-	<div class="titlebar-status">
+<div
+	class="sticky top-0 z-100 flex h-(--titlebar-height) select-none items-center justify-between border-b border-(--border) bg-(--surface)"
+	data-tauri-drag-region
+>
+	<span class="pl-3.5 text-[13px] font-semibold text-(--text-soft)" data-tauri-drag-region>
+		Autoswapper
+	</span>
+	<div class="ml-auto mr-3 flex items-center gap-3">
 		{#if native.config}
 			<label class="switch-control" title="Autoswitch">
 				<input
@@ -46,37 +51,47 @@
 			</label>
 		{/if}
 	</div>
-	<div class="titlebar-controls">
-		<button class="titlebar-button" aria-label="Minimize" onclick={() => appWindow.minimize()}>
+	<div class="flex h-full">
+		<button
+			class="inline-flex h-full min-h-0 w-11.5 cursor-default items-center justify-center rounded-none border-0 bg-transparent p-0 text-(--text-soft) hover:border-0 hover:bg-(--hover)"
+			aria-label="Minimize"
+			onclick={() => appWindow.minimize()}
+		>
 			{#if isWindows}
 				<span class="chrome-glyph">{glyph.minimize}</span>
 			{:else}
-				<svg viewBox="0 0 10 10" aria-hidden="true"><rect x="0" y="4.5" width="10" height="1" /></svg>
+				<svg class="h-2.5 w-2.5 fill-current" viewBox="0 0 10 10" aria-hidden="true">
+					<rect x="0" y="4.5" width="10" height="1" />
+				</svg>
 			{/if}
 		</button>
 		<button
-			class="titlebar-button"
+			class="inline-flex h-full min-h-0 w-11.5 cursor-default items-center justify-center rounded-none border-0 bg-transparent p-0 text-(--text-soft) hover:border-0 hover:bg-(--hover)"
 			aria-label={maximized ? 'Restore' : 'Maximize'}
 			onclick={() => appWindow.toggleMaximize()}
 		>
 			{#if isWindows}
 				<span class="chrome-glyph">{maximized ? glyph.restore : glyph.maximize}</span>
 			{:else if maximized}
-				<svg viewBox="0 0 10 10" aria-hidden="true">
+				<svg class="h-2.5 w-2.5 fill-current" viewBox="0 0 10 10" aria-hidden="true">
 					<rect x="0" y="2" width="6" height="6" fill="none" stroke="currentColor" stroke-width="1" />
 					<path d="M2.5 2 V0.5 H9.5 V7.5 H8" fill="none" stroke="currentColor" stroke-width="1" />
 				</svg>
 			{:else}
-				<svg viewBox="0 0 10 10" aria-hidden="true">
+				<svg class="h-2.5 w-2.5 fill-current" viewBox="0 0 10 10" aria-hidden="true">
 					<rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1" />
 				</svg>
 			{/if}
 		</button>
-		<button class="titlebar-button close" aria-label="Close" onclick={() => appWindow.close()}>
+		<button
+			class="inline-flex h-full min-h-0 w-11.5 cursor-default items-center justify-center rounded-none border-0 bg-transparent p-0 text-(--text-soft) hover:border-0 hover:bg-[#e81123] hover:text-white"
+			aria-label="Close"
+			onclick={() => appWindow.close()}
+		>
 			{#if isWindows}
 				<span class="chrome-glyph">{glyph.close}</span>
 			{:else}
-				<svg viewBox="0 0 10 10" aria-hidden="true">
+				<svg class="h-2.5 w-2.5 fill-current" viewBox="0 0 10 10" aria-hidden="true">
 					<path d="M0 0 L10 10 M10 0 L0 10" stroke="currentColor" stroke-width="1" />
 				</svg>
 			{/if}

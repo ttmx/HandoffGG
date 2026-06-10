@@ -69,12 +69,14 @@
 	}
 </script>
 
-<div class="panel device-list">
-	<h2>{title}</h2>
+<div class="mb-6">
+	<h2 class="mb-3 text-sm font-semibold">{title}</h2>
 
-	<p class="zone-label">Priority — top device wins</p>
+	<p class="mt-1 mb-2 text-[13px] font-semibold text-[var(--text-soft)]">
+		Priority — top device wins
+	</p>
 	<section
-		class="zone"
+		class="grid min-h-[52px] gap-1.5 rounded-lg border border-dashed border-[var(--border-strong)] p-1.5"
 		use:dndzone={{ items: priorityRows, flipDurationMs: FLIP_MS, dropTargetStyle: {} }}
 		onconsider={(e) => consider('priority', e.detail.items as DeviceRow[])}
 		onfinalize={(e) => finalize('priority', e.detail.items as DeviceRow[])}
@@ -82,43 +84,80 @@
 		{#each priorityRows as row (row.id)}
 			{@const available = isRowAvailable(row, connected)}
 			<article
-				class="row"
-				class:active={row.id === activeId}
-				class:skipped={!available}
+				class={`flex cursor-grab items-center gap-[9px] rounded-md border bg-[var(--surface)] px-2.5 py-1.5 active:cursor-grabbing ${
+					row.id === activeId
+						? 'border-[var(--accent)] shadow-[inset_3px_0_0_var(--accent)]'
+						: 'border-[var(--border)]'
+				} ${available ? '' : 'opacity-55'}`}
 				animate:flip={{ duration: FLIP_MS }}
 			>
-				<span class="grip" aria-hidden="true">⠿</span>
+				<span class="text-[15px] leading-none text-[var(--text-muted)]" aria-hidden="true">⠿</span>
 				{#if row.isPresenceTracked}
-					<span class="headset" class:on={connected} title={stateLabel(row)}>🎧</span>
+					<span
+						class={`text-[15px] ${connected ? 'opacity-100' : 'opacity-45 grayscale'}`}
+						title={stateLabel(row)}
+					>
+						🎧
+					</span>
 				{/if}
-				<span class="name">{row.name}</span>
-				<span class="badge" class:ok={available}>{stateLabel(row)}</span>
+				<span
+					class={`flex-1 overflow-hidden text-ellipsis whitespace-nowrap ${
+						available ? '' : 'line-through decoration-[var(--text-muted)]'
+					}`}
+				>
+					{row.name}
+				</span>
+				<span
+					class={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${
+						available
+							? 'bg-[color-mix(in_srgb,var(--ok)_18%,transparent)] text-[var(--ok)]'
+							: 'bg-[var(--hover)] text-[var(--text-muted)]'
+					}`}
+				>
+					{stateLabel(row)}
+				</span>
 			</article>
 		{/each}
 		{#if priorityRows.length === 0}
-			<p class="empty">Drag devices here to prioritise them.</p>
+			<p class="m-0 px-1.5 py-2 text-center text-[13px] text-[var(--text-muted)]">
+				Drag devices here to prioritise them.
+			</p>
 		{/if}
 	</section>
 
-	<p class="zone-label muted">Excluded — never selected</p>
+	<p class="mt-[18px] mb-2 text-[13px] font-medium text-[var(--text-muted)]">
+		Excluded — never selected
+	</p>
 	<section
-		class="zone excluded"
+		class="grid min-h-[52px] gap-1.5 rounded-lg border border-dashed border-[var(--border-strong)] bg-[var(--hover)] p-1.5"
 		use:dndzone={{ items: excludedRows, flipDurationMs: FLIP_MS, dropTargetStyle: {} }}
 		onconsider={(e) => consider('excluded', e.detail.items as DeviceRow[])}
 		onfinalize={(e) => finalize('excluded', e.detail.items as DeviceRow[])}
 	>
 		{#each excludedRows as row (row.id)}
-			<article class="row excluded-row" animate:flip={{ duration: FLIP_MS }}>
-				<span class="grip" aria-hidden="true">⠿</span>
+			<article
+				class="flex cursor-grab items-center gap-[9px] rounded-md border border-[var(--border)] bg-transparent px-2.5 py-1.5 active:cursor-grabbing"
+				animate:flip={{ duration: FLIP_MS }}
+			>
+				<span class="text-[15px] leading-none text-[var(--text-muted)]" aria-hidden="true">⠿</span>
 				{#if row.isPresenceTracked}
-					<span class="headset" class:on={connected} title={stateLabel(row)}>🎧</span>
+					<span
+						class={`text-[15px] ${connected ? 'opacity-100' : 'opacity-45 grayscale'}`}
+						title={stateLabel(row)}
+					>
+						🎧
+					</span>
 				{/if}
-				<span class="name">{row.name}</span>
-				<span class="badge">{stateLabel(row)}</span>
+				<span class="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{row.name}</span>
+				<span class="shrink-0 rounded-full bg-[var(--hover)] px-2 py-0.5 text-[11px] text-[var(--text-muted)]">
+					{stateLabel(row)}
+				</span>
 			</article>
 		{/each}
 		{#if excludedRows.length === 0}
-			<p class="empty">Drag devices here to ignore them.</p>
+			<p class="m-0 px-1.5 py-2 text-center text-[13px] text-[var(--text-muted)]">
+				Drag devices here to ignore them.
+			</p>
 		{/if}
 	</section>
 </div>

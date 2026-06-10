@@ -14,17 +14,19 @@
 	});
 </script>
 
-<main>
+<main class="mx-auto max-w-[1040px] p-7 max-[760px]:p-[18px]">
 	{#if native.error}
-		<section class="notice error">{native.error}</section>
+		<section class="mb-[18px] rounded-lg border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3.5 py-3 text-[var(--danger-text)]">
+			{native.error}
+		</section>
 	{/if}
 
 	{#if native.busy || !native.config}
-		<section class="panel">Loading...</section>
+		<section class="mb-6">Loading...</section>
 	{:else}
 		<HeadsetStatus presence={native.presence} />
 
-		<section class="grid">
+		<section class="grid grid-cols-2 gap-[18px] max-[760px]:block">
 			<DevicePriorityList
 				title="Output Devices"
 				flow="render"
@@ -45,8 +47,13 @@
 
 		<AppRouting sessions={native.audioSessions} onroute={native.setChatMixRoute} />
 
-		<details class="debug">
-			<summary>Debug</summary>
+		<details class="group mb-6">
+			<summary
+				class="flex cursor-pointer list-none items-center gap-1.5 py-1.5 text-[13px] font-semibold text-[var(--text-muted)] select-none [&::-webkit-details-marker]:hidden"
+			>
+				<span class="inline-block transition-transform group-open:rotate-90">▸</span>
+				Debug
+			</summary>
 			<HidStatus presence={native.presence} />
 			<DiagnosticsLog diagnostics={native.diagnostics} />
 		</details>
