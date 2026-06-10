@@ -87,7 +87,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          args: build
           tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
           releaseName: HandoffGG ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
           releaseBody: "Windows installer builds for HandoffGG."
