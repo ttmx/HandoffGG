@@ -1,5 +1,6 @@
 # HandoffGG
 
+
 ![HandoffGG settings window](docs/assets/handoffgg-screenshot.png)
 
 HandoffGG is a small Windows tray app for automatically switching audio devices when a SteelSeries wireless headset is actually connected or disconnected.
@@ -68,3 +69,8 @@ Installer output is written under:
 ```text
 src-tauri/target/release/bundle/
 ```
+<p align="center">
+  <img src="src-tauri/icons/handoffgg-icon.svg" alt="HandoffGG icon" width="96" height="96">
+</p>
+
+The icon is supposed to look like an H (from Handoff), two Gs with arrows, speaker drivers on the top, and headphones on the bottom, symbolizing the switching of audio devices. Also looks like a little face which is cool. An actual logo would be welcome, since this looks bad on the tiny tray and taskbar.
