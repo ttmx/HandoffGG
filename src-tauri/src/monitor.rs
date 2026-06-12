@@ -34,6 +34,31 @@ pub(crate) fn start_monitor(app: AppHandle, state: SharedState) {
 pub(crate) fn start_audio_device_monitor(app: AppHandle, state: SharedState) {
     let (tx, rx) = std::sync::mpsc::channel();
     crate::windows_audio::start_endpoint_notification_listener(tx);
+    run_audio_device_monitor(app, state, rx);
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn start_audio_device_monitor(app: AppHandle, state: SharedState) {
+    // The PipeWire backend fires this channel on sink/source add/remove and default
+    // changes — the Linux equivalent of the Windows IMMNotificationClient.
+    let Some(rx) = state.audio.take_change_receiver() else {
+        return;
+    };
+    run_audio_device_monitor(app, state, rx);
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub(crate) fn start_audio_device_monitor(_app: AppHandle, _state: SharedState) {}
+
+/// Shared audio-device-change loop: on each notification (debounced over a 200ms burst),
+/// re-run the switch decision and re-apply ChatMix against the current presence, then
+/// nudge the UI. Driven by the Windows endpoint listener and the Linux PipeWire backend.
+#[cfg(any(windows, target_os = "linux"))]
+fn run_audio_device_monitor(
+    app: AppHandle,
+    state: SharedState,
+    rx: std::sync::mpsc::Receiver<()>,
+) {
     thread::spawn(move || {
         while rx.recv().is_ok() {
             while rx.recv_timeout(Duration::from_millis(200)).is_ok() {}
@@ -72,9 +97,6 @@ pub(crate) fn start_audio_device_monitor(app: AppHandle, state: SharedState) {
         }
     });
 }
-
-#[cfg(not(windows))]
-pub(crate) fn start_audio_device_monitor(_app: AppHandle, _state: SharedState) {}
 
 fn process_snapshot(
     app: &AppHandle,

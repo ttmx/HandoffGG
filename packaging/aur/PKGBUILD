@@ -1,0 +1,39 @@
+# Maintainer: tiago <anthropic@tteles.dev>
+pkgname=handoffgg
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Automatic audio device switching and ChatMix for SteelSeries wireless headsets (PipeWire)"
+arch=('x86_64')
+url="https://github.com/ttmx/HandoffGG"
+license=('MIT')
+depends=('webkit2gtk-4.1' 'gtk3' 'libayatana-appindicator' 'pipewire' 'hidapi')
+makedepends=('git' 'rust' 'cargo' 'nodejs' 'npm' 'pkgconf' 'clang')
+install="$pkgname.install"
+source=("git+https://github.com/ttmx/HandoffGG.git#tag=v$pkgver")
+sha256sums=('SKIP')
+
+build() {
+  cd "$srcdir/HandoffGG"
+  npm ci
+  # --no-bundle: just compile the binary; the AUR package ships it directly rather than
+  # an AppImage/deb. beforeBuildCommand builds and embeds the SvelteKit frontend.
+  npm run tauri -- build --no-bundle
+}
+
+package() {
+  cd "$srcdir/HandoffGG"
+
+  # The cargo binary is named `autoswapper` (see src-tauri/Cargo.toml); install it as `handoffgg`.
+  install -Dm755 src-tauri/target/release/autoswapper "$pkgdir/usr/bin/handoffgg"
+
+  install -Dm644 packaging/handoffgg.desktop "$pkgdir/usr/share/applications/handoffgg.desktop"
+  install -Dm644 packaging/72-steelseries-handoffgg.rules \
+    "$pkgdir/usr/lib/udev/rules.d/72-steelseries-handoffgg.rules"
+
+  install -Dm644 src-tauri/icons/128x128.png \
+    "$pkgdir/usr/share/icons/hicolor/128x128/apps/handoffgg.png"
+  install -Dm644 src-tauri/icons/handoffgg-icon.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/handoffgg.svg"
+
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

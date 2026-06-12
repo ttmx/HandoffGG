@@ -28,13 +28,25 @@ impl SteelSeriesHidPresenceBackend {
     pub fn arctis_nova_7() -> Self {
         Self {
             vendor_id: 0x1038,
+            // Arctis Nova 7 family dongle product ids. Kept in sync with HeadsetControl's
+            // `lib/devices/steelseries_arctis_nova_7{,p}.hpp` — the firmware "percentage
+            // battery" updates (Jan 2026) shipped new ids for several variants, so a single
+            // headset model can enumerate under different ids depending on its firmware.
             product_ids: vec![
-                0x2202, // Arctis Nova 7
-                0x2206, // Arctis Nova 7X
-                0x220A, // Arctis Nova 7P
-                0x223A, // Arctis Nova 7 Diablo IV
+                0x2202, // Arctis Nova 7  (discrete battery)
+                0x22A1, // Arctis Nova 7  (percentage battery, Jan 2026 firmware)
+                0x227E, // Arctis Nova 7 Wireless Gen 2
+                0x2206, // Arctis Nova 7X (discrete battery)
+                0x22A4, // Arctis Nova 7X (discrete battery)
+                0x22A5, // Arctis Nova 7X (percentage battery)
                 0x2258, // Arctis Nova 7X V2
-                0x22A1, // Seen on some active dongle interfaces after pairing/firmware updates.
+                0x229E, // Arctis Nova 7X V2
+                0x22AD, // Arctis Nova 7X V2
+                0x223A, // Arctis Nova 7 Diablo IV (discrete battery)
+                0x22A9, // Arctis Nova 7 Diablo IV (percentage battery, Jan 2026 firmware)
+                0x227A, // Arctis Nova 7 WoW Edition
+                0x220A, // Arctis Nova 7P (chatmix/mute unsupported on this variant)
+                0x22A7, // Arctis Nova 7P V2 (percentage battery, Jan 2026 firmware)
             ],
             status_interface_number: 3,
             mute_interface_number: 5,
@@ -148,7 +160,9 @@ impl SteelSeriesHidPresenceBackend {
         }
 
         PresenceSnapshot::error(
-            last_error.unwrap_or_else(|| "No SteelSeries HID status response parsed".to_string()),
+            last_error
+                .map(|raw| explain_open_error(&raw))
+                .unwrap_or_else(|| "No SteelSeries HID status response parsed".to_string()),
         )
     }
 
@@ -166,6 +180,30 @@ impl SteelSeriesHidPresenceBackend {
 
         None
     }
+}
+
+/// Turn a raw HID-open failure into actionable guidance when it's a permissions problem.
+/// The hidraw nodes are root-only until the udev rule is installed, which is the single
+/// most common reason presence detection fails on a fresh Linux install — surfacing the
+/// fix in the diagnostics log saves users a frustrating dead end.
+fn explain_open_error(raw: &str) -> String {
+    if is_permission_error(raw) {
+        format!(
+            "SteelSeries headset detected, but its HID interface could not be opened \
+             (permission denied). Install the udev rule so your user can read the device — \
+             see the README's Linux section (packaging/72-steelseries-handoffgg.rules), then \
+             replug the headset. Raw error: {raw}"
+        )
+    } else {
+        raw.to_string()
+    }
+}
+
+fn is_permission_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("permission denied")
+        || lower.contains("access denied")
+        || lower.contains("eacces")
 }
 
 fn query_status(device: HidDevice, device_path: String) -> PresenceSnapshot {
@@ -354,7 +392,7 @@ fn open_listener_device(spec: &ListenerSpec) -> Option<(HidDevice, String)> {
     Some((device, device_path))
 }
 
-fn parse_event_snapshot(report: &[u8], device_path: &str) -> Option<PresenceSnapshot> {
+pub(crate) fn parse_event_snapshot(report: &[u8], device_path: &str) -> Option<PresenceSnapshot> {
     let parsed = HidReport::parse(report)?;
     Some(snapshot_from_report(parsed, hex_bytes(report), device_path))
 }
@@ -362,7 +400,7 @@ fn parse_event_snapshot(report: &[u8], device_path: &str) -> Option<PresenceSnap
 /// Map a decoded [`HidReport`] onto a partial [`PresenceSnapshot`]. Each report fills
 /// only the fields it carries; `merge_partial_snapshot` / `merge_presence_snapshot`
 /// stitch successive partials into the full picture.
-fn snapshot_from_report(
+pub(crate) fn snapshot_from_report(
     report: HidReport,
     raw_response: String,
     device_path: &str,
@@ -414,7 +452,7 @@ fn snapshot_from_report(
     }
 }
 
-fn merge_partial_snapshot(
+pub(crate) fn merge_partial_snapshot(
     previous: PresenceSnapshot,
     snapshot: PresenceSnapshot,
 ) -> PresenceSnapshot {

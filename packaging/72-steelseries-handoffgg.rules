@@ -1,0 +1,15 @@
+# HandoffGG: grant the logged-in user access to SteelSeries Arctis HID interfaces.
+#
+# Presence detection reads the dongle's vendor HID reports via hidraw, which is
+# root-only by default. `uaccess` hands access to the active local session (systemd-
+# logind); the plugdev/0660 lines are a fallback for systems without uaccess.
+#
+# The filename MUST sort before systemd's 73-seat-late.rules: that rule is what runs the
+# `uaccess` builtin (RUN{builtin}+="uaccess") to apply the ACL, and it only does so for
+# devices already carrying the `uaccess` tag at that point. A 99-* rule adds the tag too
+# late — the tag ends up set but no ACL is ever written. Hence the 72- prefix.
+#
+# Vendor 0x1038 = SteelSeries. After installing, reload with:
+#   sudo udevadm control --reload-rules && sudo udevadm trigger --action=add
+KERNEL=="hidraw*", ATTRS{idVendor}=="1038", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="1038", GROUP="plugdev", MODE="0660"

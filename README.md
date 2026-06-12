@@ -3,68 +3,115 @@
 
 ![HandoffGG settings window](docs/assets/handoffgg-screenshot.png)
 
-HandoffGG is a small Windows tray app for automatically switching audio devices when a SteelSeries wireless headset is actually connected or disconnected.
+HandoffGG is a small tray app for automatically switching audio devices when a SteelSeries wireless headset is actually connected or disconnected. It runs on **Windows** (Core Audio) and **Linux** (Wayland/X11 with PipeWire).
 
 This was almost entirely vibecoded, with some manual cleanup here and there.
 
 ## What It Does
 
 - Allows you to set a priority list of audio devices for output/input. When your SteelSeries headset disconnects, it moves down the list to the next available device, same thing happens if a device is unplugged. When the headset reconnects, it moves back up to the headset devices.
-- Allows you to use the headset's chatmix wheel to adjust the volume of apps configured as "chat" and "game". Apps are assigned to chat automatically via Windows audio sessions, but you can also set them manually.
+- Allows you to use the headset's chatmix wheel to adjust the volume of apps configured as "chat" and "game". Apps are assigned to chat automatically via OS audio sessions (Windows audio sessions / PipeWire output streams), but you can also set them manually.
 - DOESN'T KEEP RESETTING YOUR DEVICE PREFERENCES. 
 - DOESN'T RANDOMLY STOP OPENING.
 - 6MB memory usage when in the tray.
 
 ## Limitations
-This is a first version, tested only on my machine, on Windows 11, with a SteelSeries Arctis Nova 7. Very likely not to work with most other models, if there is interest in supporting more models, PRs are welcome.
+This was developed against a SteelSeries Arctis Nova 7 on Windows 11. The Linux backend (PipeWire) was written and tested without the headset on hand — the HID layer is shared with Windows and validated by replaying captured USB report frames through the decision pipeline (see `src-tauri/src/pipeline_tests.rs`), but real-hardware confirmation on Linux is still welcome. Very likely not to work with most other models; if there is interest in supporting more, PRs are welcome.
 
 ## Installation
 
-Windows installers are published from GitHub Releases:
+### Windows
+
+Installers (MSI) are published from GitHub Releases:
 
 https://github.com/ttmx/HandoffGG/releases
 
-The release workflow currently builds:
+### Linux
 
-- NSIS setup executable
-- MSI installer
+Two options:
+
+- **AppImage** — download the `.AppImage` from the same Releases page, `chmod +x` it, and run.
+- **Arch (AUR)** — install the `handoffgg` package (PKGBUILD under [`packaging/aur`](packaging/aur)).
+
+Linux needs PipeWire (with WirePlumber) running, which is the default on current desktop
+distros. Presence detection reads the headset over `hidraw`, which is root-only by default,
+so install the udev rule that ships in [`packaging/72-steelseries-handoffgg.rules`](packaging/72-steelseries-handoffgg.rules)
+(the AUR package installs it for you):
+
+```bash
+sudo cp packaging/72-steelseries-handoffgg.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger --action=add
+```
+
+(The `72-` prefix matters: the rule has to sort before systemd's `73-seat-late.rules`,
+which is what actually applies the access ACL. A higher number tags the device but never
+grants access. No logout needed — the trigger above re-applies the rule to the plugged-in
+headset.)
+
+#### Desktop integration / how to open and quit it
+
+HandoffGG lives in the background. How you reach it depends on the desktop:
+
+- **KDE, XFCE, GNOME with the [AppIndicator extension](https://extensions.gnome.org/extension/615/appindicator-support/)** — it shows a **system tray icon**: left-click opens settings, right-click for the menu.
+- **GNOME (default, no tray)** — there is no tray icon. Instead:
+  - **Open settings**: click the HandoffGG icon in the app grid. (It runs as a single
+    instance, so this focuses the existing window or opens a new one — it never starts a
+    second copy.)
+  - **Quit**: right-click the app-grid icon → **Quit**, or use **Quick Settings →
+    Background Apps**, where HandoffGG registers itself via the desktop portal. From a
+    terminal, `handoffgg --quit` also works.
+- **Autostart** (any desktop): enable it from the settings window. The login-time launch
+  passes `--hidden` so it starts quietly in the background instead of popping the window.
 
 ## Development
 
 This project uses:
 
 - Tauri 2 for the desktop shell and tray integration
-- Rust for Windows audio, HID, and native app behavior
+- Rust for the native behaviour: HID presence (cross-platform via `hidapi`), Windows Core
+  Audio (`windows_audio.rs`) and Linux PipeWire (`pipewire_audio.rs`) behind a shared
+  `AudioBackend` trait
 - SvelteKit, Svelte 5, TypeScript, Vite, and Tailwind CSS for the UI
 
-Install dependencies:
+On Linux, install the build dependencies first (Arch shown; on Debian/Ubuntu use the
+`-dev` packages from the [CI workflow](.github/workflows/build-installers.yml)):
 
-```powershell
-npm ci
+```bash
+sudo pacman -S --needed webkit2gtk-4.1 gtk3 libayatana-appindicator pipewire clang pkgconf nodejs npm
 ```
 
-Run the app in development:
+Install dependencies and run in development:
 
-```powershell
+```bash
+npm ci
 npm run tauri -- dev
 ```
 
 Run checks:
 
-```powershell
+```bash
 npm run check
 npm run lint
 cd src-tauri
 cargo check --locked
+cargo test --locked
 ```
 
-Build installers locally:
+Build locally:
 
-```powershell
+```bash
 npm run tauri -- build
 ```
 
-Installer output is written under:
+On Arch (and other distros with very recent binutils), the AppImage step needs two env
+vars — `NO_STRIP=1` because linuxdeploy's bundled `strip` can't parse modern `.relr.dyn`
+sections, and `APPIMAGE_EXTRACT_AND_RUN=1` if AppImage FUSE-mounting is unavailable:
+
+```bash
+NO_STRIP=1 APPIMAGE_EXTRACT_AND_RUN=1 npm run tauri -- build
+```
+
+Bundle output (MSI on Windows, AppImage on Linux) is written under:
 
 ```text
 src-tauri/target/release/bundle/

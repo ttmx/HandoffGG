@@ -1,0 +1,20 @@
+[Desktop Entry]
+Type=Application
+Name=HandoffGG
+GenericName=Headset Audio Switcher
+Comment=Automatic audio device switching and ChatMix for SteelSeries wireless headsets
+Exec=handoffgg
+Icon=handoffgg
+Terminal=false
+Categories=AudioVideo;Audio;Utility;
+Keywords=audio;headset;steelseries;arctis;chatmix;pipewire;
+StartupNotify=false
+StartupWMClass=HandoffGG
+Actions=Quit;
+
+# Surfaces as a right-click action on the app-grid icon (and in GNOME's Background Apps
+# menu), so the app can be quit without a system tray. `--quit` is routed to the running
+# instance by tauri-plugin-single-instance.
+[Desktop Action Quit]
+Name=Quit
+Exec=handoffgg --quit

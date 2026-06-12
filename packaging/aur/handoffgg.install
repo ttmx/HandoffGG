@@ -1,0 +1,20 @@
+post_install() {
+  udevadm control --reload-rules 2>/dev/null || true
+  udevadm trigger --subsystem-match=hidraw 2>/dev/null || true
+  cat <<'EOF'
+==> HandoffGG installed.
+    A udev rule for SteelSeries devices (vendor 0x1038) was installed. If your
+    headset was already plugged in, replug it (or log out/in) so the new
+    permissions take effect.
+    Launch from your app menu or run `handoffgg`. It lives in the system tray.
+EOF
+}
+
+post_upgrade() {
+  udevadm control --reload-rules 2>/dev/null || true
+  udevadm trigger --subsystem-match=hidraw 2>/dev/null || true
+}
+
+post_remove() {
+  udevadm control --reload-rules 2>/dev/null || true
+}
