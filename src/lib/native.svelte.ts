@@ -34,6 +34,8 @@ export type AppConfig = {
 	output: FlowConfig;
 	input: FlowConfig;
 	chatmix: ChatMixConfig;
+	/** Notify when battery drops to/below this percentage; 0 disables. */
+	lowBatteryPercent: number;
 	debug: DebugConfig;
 };
 
@@ -140,8 +142,8 @@ export type AudioSession = {
 
 export type DiagnosticEvent = {
 	timestampMs: number;
-	level: string;
-	category: string;
+	level: 'info' | 'warn';
+	category: 'general' | 'chatmix';
 	message: string;
 };
 
@@ -233,18 +235,11 @@ class NativeBridge {
 		this.busy = true;
 		this.error = '';
 		try {
-			const [nextConfig, nextEndpoints, nextPresence, nextDiagnostics, nextSessions] = await Promise.all([
+			const [nextConfig] = await Promise.all([
 				apiInvoke<AppConfig>('get_config'),
-				apiInvoke<AudioEndpoint[]>('list_endpoints'),
-				apiInvoke<PresenceSnapshot>('get_presence'),
-				apiInvoke<DiagnosticEvent[]>('get_diagnostics'),
-				apiInvoke<AudioSession[]>('list_audio_sessions'),
+				this.refreshLiveState(),
 			]);
 			this.config = nextConfig;
-			this.endpoints = nextEndpoints;
-			this.presence = nextPresence;
-			this.diagnostics = nextDiagnostics.reverse();
-			this.audioSessions = nextSessions;
 		} catch (err) {
 			this.error = String(err);
 		} finally {

@@ -1,5 +1,5 @@
 use crate::hid_report::HidReport;
-use crate::models::{now_ms, PresenceSnapshot};
+use crate::models::PresenceSnapshot;
 use hidapi::{DeviceInfo, HidApi, HidDevice};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
@@ -15,13 +15,18 @@ pub trait HeadsetPresenceBackend: Send {
     fn refresh_status(&mut self) -> PresenceSnapshot;
 }
 
+/// How long to wait between attempts to (re)start the event listeners while no
+/// dongle is present. Each attempt is a full USB enumeration (`HidApi::new`), so
+/// retrying it at the monitor's own pace would keep the bus busy for nothing.
+const LISTENER_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+
 pub struct SteelSeriesHidPresenceBackend {
     vendor_id: u16,
     product_ids: Vec<u16>,
     status_interface_number: i32,
     mute_interface_number: i32,
     listener_rx: Option<Receiver<PresenceSnapshot>>,
-    preferred_path: Option<String>,
+    next_listener_attempt: Option<Instant>,
 }
 
 impl SteelSeriesHidPresenceBackend {
@@ -51,7 +56,7 @@ impl SteelSeriesHidPresenceBackend {
             status_interface_number: 3,
             mute_interface_number: 5,
             listener_rx: None,
-            preferred_path: None,
+            next_listener_attempt: None,
         }
     }
 
@@ -101,7 +106,6 @@ impl HeadsetPresenceBackend for SteelSeriesHidPresenceBackend {
                     snapshot = merge_partial_snapshot(snapshot, control_snapshot);
                 }
             }
-            self.preferred_path = snapshot.device_path.clone();
         }
         snapshot
     }
@@ -112,7 +116,19 @@ impl HeadsetPresenceBackend for SteelSeriesHidPresenceBackend {
 
     fn wait_for_event(&mut self, timeout: Duration) -> Option<PresenceSnapshot> {
         if self.listener_rx.is_none() {
-            self.listener_rx = self.start_event_listeners().ok();
+            let due = self
+                .next_listener_attempt
+                .map_or(true, |at| Instant::now() >= at);
+            if due {
+                self.next_listener_attempt = Some(Instant::now() + LISTENER_RETRY_INTERVAL);
+                self.listener_rx = self.start_event_listeners().ok();
+            }
+            if self.listener_rx.is_none() {
+                // No dongle: sleep out the caller's timeout so the monitor loop
+                // does not spin between (throttled) enumeration attempts.
+                thread::sleep(timeout);
+                return None;
+            }
         }
 
         match self.listener_rx.as_ref()?.recv_timeout(timeout) {
@@ -206,92 +222,50 @@ fn is_permission_error(message: &str) -> bool {
         || lower.contains("eacces")
 }
 
-fn query_status(device: HidDevice, device_path: String) -> PresenceSnapshot {
-    if let Err(error) = device.set_blocking_mode(false) {
-        return PresenceSnapshot {
-            connected: false,
-            has_connection_status: false,
-            mic_muted: None,
-            battery_percent: None,
-            game_volume: None,
-            chat_volume: None,
-            raw_response: None,
-            device_path: Some(device_path),
-            error: Some(format!("HID nonblocking mode failed: {error}")),
-            observed_at_ms: now_ms(),
-        };
-    }
+/// Write the `0xB0` status request and read back the raw reply bytes.
+fn try_query_status(device: &HidDevice) -> Result<Vec<u8>, String> {
+    device
+        .set_blocking_mode(false)
+        .map_err(|error| format!("HID nonblocking mode failed: {error}"))?;
 
     let mut out_report = [0_u8; 65];
     out_report[1] = 0xB0;
-    if let Err(error) = device.write(&out_report) {
-        return PresenceSnapshot {
-            connected: false,
-            has_connection_status: false,
-            mic_muted: None,
-            battery_percent: None,
-            game_volume: None,
-            chat_volume: None,
-            raw_response: None,
-            device_path: Some(device_path),
-            error: Some(format!("HID status write failed: {error}")),
-            observed_at_ms: now_ms(),
-        };
-    }
+    device
+        .write(&out_report)
+        .map_err(|error| format!("HID status write failed: {error}"))?;
 
     let mut in_report = [0_u8; 65];
-    let read = match device.read_timeout(
-        &mut in_report,
-        Duration::from_millis(700).as_millis() as i32,
-    ) {
-        Ok(read) => read,
+    let read = device
+        .read_timeout(&mut in_report, 700)
+        .map_err(|error| format!("HID status read failed: {error}"))?;
+    if read == 0 {
+        return Err("HID status read timed out".to_string());
+    }
+    Ok(in_report[..read].to_vec())
+}
+
+fn query_status(device: HidDevice, device_path: String) -> PresenceSnapshot {
+    let reply = match try_query_status(&device) {
+        Ok(reply) => reply,
         Err(error) => {
             return PresenceSnapshot {
-                connected: false,
-                has_connection_status: false,
-                mic_muted: None,
-                battery_percent: None,
-                game_volume: None,
-                chat_volume: None,
-                raw_response: None,
                 device_path: Some(device_path),
-                error: Some(format!("HID status read failed: {error}")),
-                observed_at_ms: now_ms(),
+                error: Some(error),
+                ..Default::default()
             }
         }
     };
 
-    if read == 0 {
-        return PresenceSnapshot {
-            connected: false,
-            has_connection_status: false,
-            mic_muted: None,
-            battery_percent: None,
-            game_volume: None,
-            chat_volume: None,
-            raw_response: None,
-            device_path: Some(device_path),
-            error: Some("HID status read timed out".to_string()),
-            observed_at_ms: now_ms(),
-        };
-    }
-
-    let raw_response = hex_bytes(&in_report[..read]);
-    match HidReport::parse(&in_report[..read]) {
+    let raw_response = hex_bytes(&reply);
+    match HidReport::parse(&reply) {
         Some(parsed @ HidReport::Status { .. }) => {
             snapshot_from_report(parsed, raw_response, &device_path)
         }
         _ => PresenceSnapshot {
-            connected: false,
-            has_connection_status: false,
-            mic_muted: None,
-            battery_percent: None,
-            game_volume: None,
-            chat_volume: None,
             raw_response: Some(raw_response),
             device_path: Some(device_path),
             error: Some("HID status response did not match Nova 7 parser".to_string()),
-            observed_at_ms: now_ms(),
+            ..Default::default()
         },
     }
 }
@@ -300,16 +274,8 @@ fn query_initial_control_state(device: HidDevice, device_path: String) -> Option
     let started_at = Instant::now();
     let timeout = Duration::from_millis(500);
     let mut snapshot = PresenceSnapshot {
-        connected: false,
-        has_connection_status: false,
-        mic_muted: None,
-        battery_percent: None,
-        game_volume: None,
-        chat_volume: None,
-        raw_response: None,
         device_path: Some(device_path.clone()),
-        error: None,
-        observed_at_ms: now_ms(),
+        ..Default::default()
     };
 
     while started_at.elapsed() < timeout {
@@ -354,8 +320,10 @@ struct ListenerSpec {
 /// (app shutdown). A read error no longer kills presence detection — it just
 /// triggers a reconnect — and transient errors are not surfaced as diagnostics.
 fn event_reader_loop(spec: ListenerSpec, tx: mpsc::Sender<PresenceSnapshot>) {
+    let mut retry_delay = Duration::from_millis(1_000);
     loop {
         if let Some((device, device_path)) = open_listener_device(&spec) {
+            retry_delay = Duration::from_millis(1_000);
             loop {
                 let mut in_report = [0_u8; 65];
                 match device.read_timeout(&mut in_report, 30_000) {
@@ -374,9 +342,11 @@ fn event_reader_loop(spec: ListenerSpec, tx: mpsc::Sender<PresenceSnapshot>) {
             }
         }
 
-        // Device unavailable or errored; wait before retrying so a missing dongle
-        // does not spin the CPU.
-        thread::sleep(Duration::from_millis(1_000));
+        // Device unavailable or errored: back off (1s → 10s cap, reset on a
+        // successful open) so a missing dongle is not re-enumerated every second,
+        // while a replug is still picked up quickly.
+        thread::sleep(retry_delay);
+        retry_delay = (retry_delay * 2).min(Duration::from_secs(10));
     }
 }
 
@@ -406,16 +376,9 @@ pub(crate) fn snapshot_from_report(
     device_path: &str,
 ) -> PresenceSnapshot {
     let base = PresenceSnapshot {
-        connected: false,
-        has_connection_status: false,
-        mic_muted: None,
-        battery_percent: None,
-        game_volume: None,
-        chat_volume: None,
         raw_response: Some(raw_response),
         device_path: Some(device_path.to_string()),
-        error: None,
-        observed_at_ms: now_ms(),
+        ..Default::default()
     };
 
     match report {

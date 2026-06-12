@@ -1,8 +1,18 @@
 <script lang="ts">
 	import { Gamepad2, MessageCircle } from '@lucide/svelte';
-	import type { PresenceSnapshot } from '$lib/native.svelte';
+	import { native, type PresenceSnapshot } from '$lib/native.svelte';
 
 	let { presence }: { presence: PresenceSnapshot | null } = $props();
+
+	// Clamp before saving: the backend stores the threshold as a percentage byte.
+	const saveLowBattery = () => {
+		if (!native.config) return;
+		native.config.lowBatteryPercent = Math.max(
+			0,
+			Math.min(99, Math.round(Number(native.config.lowBatteryPercent) || 0)),
+		);
+		native.save();
+	};
 
 	let batteryLabel = $derived(
 		presence?.batteryPercent === null || presence?.batteryPercent === undefined
@@ -91,4 +101,21 @@
 			</span>
 		</div>
 	</div>
+	{#if native.config}
+		<label
+			class="ml-auto flex shrink-0 items-center gap-1.5 pl-3.5 text-[12px] font-semibold text-(--text-muted)"
+			title="Send a desktop notification when the battery drops to this level. 0 disables it."
+		>
+			<span>Low-battery alert</span>
+			<input
+				type="number"
+				min="0"
+				max="99"
+				class="w-13 rounded-md border border-(--border) bg-(--surface) px-1.5 py-0.5 text-right text-(--text-soft)"
+				bind:value={native.config.lowBatteryPercent}
+				onchange={saveLowBattery}
+			/>
+			<span>%</span>
+		</label>
+	{/if}
 </section>

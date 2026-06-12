@@ -8,6 +8,7 @@ mod models;
 mod monitor;
 mod presence;
 mod rules;
+mod status_file;
 mod switch;
 mod theme;
 mod volume;
@@ -58,6 +59,7 @@ pub fn run() {
             }
             let _ = crate::window::show_main_window(app);
         }))
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_autostart::Builder::new()

@@ -10,10 +10,10 @@ use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Foundation::{CloseHandle, PROPERTYKEY};
 use windows::Win32::Media::Audio::{
     eCapture, eCommunications, eConsole, eMultimedia, eRender, EDataFlow, ERole,
-    IAudioSessionControl2, IAudioSessionManager2, IMMDevice, IMMDeviceEnumerator,
-    IMMNotificationClient, IMMNotificationClient_Impl, ISimpleAudioVolume, MMDeviceEnumerator,
-    DEVICE_STATE, DEVICE_STATE_ACTIVE, DEVICE_STATE_DISABLED, DEVICE_STATE_NOTPRESENT,
-    DEVICE_STATE_UNPLUGGED,
+    IAudioSessionControl, IAudioSessionControl2, IAudioSessionManager2, IMMDevice,
+    IMMDeviceEnumerator, IMMNotificationClient, IMMNotificationClient_Impl, ISimpleAudioVolume,
+    MMDeviceEnumerator, DEVICE_STATE, DEVICE_STATE_ACTIVE, DEVICE_STATE_DISABLED,
+    DEVICE_STATE_NOTPRESENT, DEVICE_STATE_UNPLUGGED,
 };
 use windows::Win32::System::Com::StructuredStorage::PropVariantClear;
 use windows::Win32::System::Com::{
@@ -23,8 +23,8 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
-use windows_implement::implement;
 use windows_core::BOOL;
+use windows_implement::implement;
 
 pub struct WindowsAudioBackend;
 
@@ -87,31 +87,24 @@ impl AudioBackend for WindowsAudioBackend {
             let enumerator = device_enumerator()?;
             let device = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia) }
                 .context("failed to get default render endpoint")?;
-            let manager: IAudioSessionManager2 = unsafe { device.Activate(CLSCTX_ALL, None) }
-                .context("failed to activate audio session manager")?;
-            let sessions = unsafe { manager.GetSessionEnumerator() }
-                .context("failed to enumerate audio sessions")?;
-            let count = unsafe { sessions.GetCount() }.context("failed to get session count")?;
-            for index in 0..count {
-                let control =
-                    unsafe { sessions.GetSession(index) }.context("failed to get audio session")?;
-                let control2: IAudioSessionControl2 = control
-                    .cast()
-                    .context("failed to query audio session control")?;
-                let id = session_instance_id(&control2)?;
-                if id == session_id {
-                    let volume_control: ISimpleAudioVolume = control
-                        .cast()
-                        .context("failed to query session volume control")?;
-                    unsafe {
-                        volume_control
-                            .SetMasterVolume(volume.clamp(0.0, 1.0), std::ptr::null())
-                            .context("failed to set session volume")?;
-                    }
-                    return Ok(());
+            let mut found = false;
+            for_each_session(&device, |control, control2| {
+                if session_instance_id(control2)? != session_id {
+                    return Ok(false);
                 }
-            }
-            anyhow::bail!("Audio session was not found");
+                let volume_control: ISimpleAudioVolume = control
+                    .cast()
+                    .context("failed to query session volume control")?;
+                unsafe {
+                    volume_control
+                        .SetMasterVolume(volume.clamp(0.0, 1.0), std::ptr::null())
+                        .context("failed to set session volume")?;
+                }
+                found = true;
+                Ok(true)
+            })?;
+            anyhow::ensure!(found, "Audio session was not found");
+            Ok(())
         })
     }
 }
@@ -200,33 +193,45 @@ impl IMMNotificationClient_Impl for EndpointNotificationClient_Impl {
     }
 }
 
-fn enumerate_render_sessions(
+/// Walk every audio session on `device`, yielding each session's control interfaces.
+/// Sessions whose `IAudioSessionControl2` cast fails are skipped. The closure returns
+/// `true` to stop the walk early.
+fn for_each_session(
     device: &IMMDevice,
-    chatmix: &ChatMixConfig,
-) -> anyhow::Result<Vec<AudioSession>> {
+    mut visit: impl FnMut(&IAudioSessionControl, &IAudioSessionControl2) -> anyhow::Result<bool>,
+) -> anyhow::Result<()> {
     let manager: IAudioSessionManager2 = unsafe { device.Activate(CLSCTX_ALL, None) }
         .context("failed to activate audio session manager")?;
     let sessions =
         unsafe { manager.GetSessionEnumerator() }.context("failed to enumerate audio sessions")?;
     let count = unsafe { sessions.GetCount() }.context("failed to get session count")?;
-    let mut result = Vec::new();
-
     for index in 0..count {
         let control =
             unsafe { sessions.GetSession(index) }.context("failed to get audio session")?;
-        let control2: IAudioSessionControl2 = match control.cast() {
-            Ok(control2) => control2,
-            Err(_) => continue,
-        };
-        if unsafe { control2.IsSystemSoundsSession() }.0 == 0 {
+        let Ok(control2) = control.cast::<IAudioSessionControl2>() else {
             continue;
+        };
+        if visit(&control, &control2)? {
+            break;
         }
-        let volume_control: ISimpleAudioVolume = match control.cast() {
-            Ok(volume_control) => volume_control,
-            Err(_) => continue,
+    }
+    Ok(())
+}
+
+fn enumerate_render_sessions(
+    device: &IMMDevice,
+    chatmix: &ChatMixConfig,
+) -> anyhow::Result<Vec<AudioSession>> {
+    let mut result = Vec::new();
+    for_each_session(device, |control, control2| {
+        if unsafe { control2.IsSystemSoundsSession() }.0 == 0 {
+            return Ok(false);
+        }
+        let Ok(volume_control) = control.cast::<ISimpleAudioVolume>() else {
+            return Ok(false);
         };
 
-        let id = session_instance_id(&control2)?;
+        let id = session_instance_id(control2)?;
         let process_id = unsafe { control2.GetProcessId() }.unwrap_or_default();
         let executable_path = process_image_path(process_id);
         let raw_display = unsafe { control.GetDisplayName() }
@@ -260,7 +265,8 @@ fn enumerate_render_sessions(
             volume,
             muted,
         });
-    }
+        Ok(false)
+    })?;
 
     result.sort_by(|a, b| {
         a.display_name

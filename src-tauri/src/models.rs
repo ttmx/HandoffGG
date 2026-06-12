@@ -66,6 +66,10 @@ pub struct AppConfig {
     pub input: FlowConfig,
     #[serde(default)]
     pub chatmix: ChatMixConfig,
+    /// Notify when the battery drops to or below this percentage while connected.
+    /// `0` disables the notification.
+    #[serde(default = "default_low_battery_percent")]
+    pub low_battery_percent: u8,
     #[serde(default)]
     pub debug: DebugConfig,
 }
@@ -77,9 +81,14 @@ impl Default for AppConfig {
             output: FlowConfig::default(),
             input: FlowConfig::default(),
             chatmix: ChatMixConfig::default(),
+            low_battery_percent: default_low_battery_percent(),
             debug: DebugConfig::default(),
         }
     }
+}
+
+fn default_low_battery_percent() -> u8 {
+    15
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,8 +166,9 @@ pub struct PresenceSnapshot {
     pub observed_at_ms: u128,
 }
 
-impl PresenceSnapshot {
-    pub fn error(message: impl Into<String>) -> Self {
+/// An empty snapshot observed now; partial reports fill in the fields they carry.
+impl Default for PresenceSnapshot {
+    fn default() -> Self {
         Self {
             connected: false,
             has_connection_status: false,
@@ -168,8 +178,17 @@ impl PresenceSnapshot {
             chat_volume: None,
             raw_response: None,
             device_path: None,
-            error: Some(message.into()),
+            error: None,
             observed_at_ms: now_ms(),
+        }
+    }
+}
+
+impl PresenceSnapshot {
+    pub fn error(message: impl Into<String>) -> Self {
+        Self {
+            error: Some(message.into()),
+            ..Self::default()
         }
     }
 }
@@ -188,39 +207,52 @@ pub struct SwitchDecision {
     pub actions: Vec<DecisionAction>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DiagnosticLevel {
+    Info,
+    Warn,
+}
+
+/// Coarse grouping used by the diagnostics UI filter: chatmix-related events can be
+/// shown/hidden on their own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DiagnosticCategory {
+    General,
+    Chatmix,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticEvent {
     pub timestamp_ms: u128,
-    pub level: String,
-    /// Coarse grouping used by the diagnostics UI filter. "general" by default;
-    /// chatmix-related events use "chatmix" so they can be shown/hidden on their own.
-    pub category: String,
+    pub level: DiagnosticLevel,
+    pub category: DiagnosticCategory,
     pub message: String,
 }
 
 impl DiagnosticEvent {
     pub fn info(message: impl Into<String>) -> Self {
-        Self {
-            timestamp_ms: now_ms(),
-            level: "info".to_string(),
-            category: "general".to_string(),
-            message: message.into(),
-        }
+        Self::new(DiagnosticLevel::Info, message)
     }
 
     pub fn warn(message: impl Into<String>) -> Self {
+        Self::new(DiagnosticLevel::Warn, message)
+    }
+
+    fn new(level: DiagnosticLevel, message: impl Into<String>) -> Self {
         Self {
             timestamp_ms: now_ms(),
-            level: "warn".to_string(),
-            category: "general".to_string(),
+            level,
+            category: DiagnosticCategory::General,
             message: message.into(),
         }
     }
 
-    /// Tag this event with a category (e.g. "chatmix") for UI filtering.
-    pub fn category(mut self, category: impl Into<String>) -> Self {
-        self.category = category.into();
+    /// Tag this event with a non-default category for UI filtering.
+    pub fn category(mut self, category: DiagnosticCategory) -> Self {
+        self.category = category;
         self
     }
 }

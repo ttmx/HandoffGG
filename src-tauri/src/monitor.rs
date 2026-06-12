@@ -3,17 +3,24 @@
 
 use crate::app_state::{push_event, AppState, SharedState};
 use crate::models::{now_ms, DiagnosticEvent, PresenceSnapshot};
+use crate::presence::merge_partial_snapshot;
+use crate::status_file;
 use crate::switch::{apply_decision, decide_current};
 use crate::volume::{log_chatmix_wheel, sync_chatmix};
 use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
+use tauri_plugin_notification::NotificationExt;
+
+/// Emitted (with a `now_ms` payload) whenever backend state changed enough that the
+/// settings UI should refetch. Mirrored by `STATE_CHANGED_EVENT` in `native.svelte.ts`.
+pub(crate) const STATE_CHANGED_EVENT: &str = "autoswapper://state-changed";
 
 pub(crate) fn start_monitor(app: AppHandle, state: SharedState) {
     thread::spawn(move || {
         let initial_snapshot = state.presence.lock().snapshot();
         let mut stable_connected = Some(initial_snapshot.connected);
-        handle_presence_snapshot(&app, &state, initial_snapshot, true);
+        process_snapshot(&app, &state, initial_snapshot, &mut stable_connected, true);
 
         // Fully event-driven: the dongle pushes unsolicited reports for connection /
         // battery (MI_03) and mute / chatmix (MI_05). We block on those and react.
@@ -25,7 +32,7 @@ pub(crate) fn start_monitor(app: AppHandle, state: SharedState) {
             else {
                 continue;
             };
-            process_snapshot(&app, &state, snapshot, &mut stable_connected);
+            process_snapshot(&app, &state, snapshot, &mut stable_connected, false);
         }
     });
 }
@@ -54,101 +61,194 @@ pub(crate) fn start_audio_device_monitor(_app: AppHandle, _state: SharedState) {
 /// re-run the switch decision and re-apply ChatMix against the current presence, then
 /// nudge the UI. Driven by the Windows endpoint listener and the Linux PipeWire backend.
 #[cfg(any(windows, target_os = "linux"))]
-fn run_audio_device_monitor(
-    app: AppHandle,
-    state: SharedState,
-    rx: std::sync::mpsc::Receiver<()>,
-) {
+fn run_audio_device_monitor(app: AppHandle, state: SharedState, rx: std::sync::mpsc::Receiver<()>) {
     thread::spawn(move || {
         while rx.recv().is_ok() {
             while rx.recv_timeout(Duration::from_millis(200)).is_ok() {}
 
             let presence = state.last_presence.lock().clone();
-            let connected = presence.as_ref().map(|p| p.connected).unwrap_or(false);
-            let has_status = presence
-                .as_ref()
-                .map(|p| p.has_connection_status)
-                .unwrap_or(false);
-
-            match decide_current(&state, connected, has_status)
-                .and_then(|decision| apply_decision(&state, &decision).map(|()| decision))
-            {
-                Ok(decision) => push_event(
-                    &state,
-                    DiagnosticEvent::info(format!("Audio device change: {}", decision.reason)),
-                ),
-                Err(error) => push_event(
-                    &state,
-                    DiagnosticEvent::warn(format!("Audio device refresh failed: {error}")),
-                ),
-            }
+            let connected = presence.as_ref().is_some_and(|p| p.connected);
+            let has_status = presence.as_ref().is_some_and(|p| p.has_connection_status);
+            decide_and_apply(&state, connected, has_status, "Device-change");
 
             if let Some(presence) = presence {
-                if let Err(error) = sync_chatmix(&state, &presence, "audio_device") {
-                    push_event(
-                        &state,
-                        DiagnosticEvent::warn(format!("ChatMix apply failed: {error}"))
-                            .category("chatmix"),
-                    );
-                }
+                sync_chatmix(&state, &presence, "audio_device");
             }
 
-            let _ = app.emit("autoswapper://state-changed", now_ms());
+            let _ = app.emit(STATE_CHANGED_EVENT, now_ms());
         }
     });
 }
 
+/// The single snapshot pipeline, for both the startup probe (`initial`) and every
+/// subsequent HID event: log the wheel, merge into the stored state, then run the
+/// side effects (ChatMix, switch decision, UI nudge) the change calls for.
 fn process_snapshot(
     app: &AppHandle,
     state: &AppState,
     snapshot: PresenceSnapshot,
     stable_connected: &mut Option<bool>,
+    initial: bool,
 ) {
-    if snapshot.error.is_some() {
-        handle_presence_snapshot(app, state, snapshot, false);
-        return;
-    }
-
-    // A report that carries the wheel position is a chatmix event (0x45 wheel turn).
-    // Log the raw reading before merging so the actual reported value is visible.
+    // A report that carries the wheel position is a chatmix event (0x45 wheel turn or
+    // the startup 0xB0 poll). Log the raw reading before merging so it stays visible.
     if snapshot.game_volume.is_some() || snapshot.chat_volume.is_some() {
-        log_chatmix_wheel(state, "wheel", snapshot.game_volume, snapshot.chat_volume);
-    }
-
-    let merged_snapshot = merge_presence_snapshot(state, snapshot);
-    if !presence_changed(state, &merged_snapshot) {
-        *state.last_presence.lock() = Some(merged_snapshot);
-        return;
-    }
-
-    let connection_changed = merged_snapshot.has_connection_status
-        && *stable_connected != Some(merged_snapshot.connected);
-    *state.last_presence.lock() = Some(merged_snapshot.clone());
-    if let Err(error) = sync_chatmix(state, &merged_snapshot, "hid_event") {
-        push_event(
+        log_chatmix_wheel(
             state,
-            DiagnosticEvent::warn(format!("ChatMix apply failed: {error}")),
+            if initial { "initial" } else { "wheel" },
+            snapshot.game_volume,
+            snapshot.chat_volume,
         );
     }
 
-    if connection_changed {
-        *stable_connected = Some(merged_snapshot.connected);
-        let connected = merged_snapshot.connected;
-        handle_presence_snapshot(app, state, merged_snapshot, false);
+    // An error snapshot (e.g. the startup probe found no readable interface) replaces
+    // the stored state wholesale — there is nothing to merge and no decision to make.
+    if let Some(error) = snapshot.error.clone() {
+        *state.last_presence.lock() = Some(snapshot.clone());
+        status_file::write(&snapshot);
+        sync_chatmix(
+            state,
+            &snapshot,
+            if initial { "initial" } else { "presence" },
+        );
+        push_event(
+            state,
+            DiagnosticEvent::warn(format!("Presence event failed: {error}")),
+        );
+        let _ = app.emit(STATE_CHANGED_EVENT, now_ms());
+        return;
+    }
+
+    // Merge the (partial) report into the stored state under a single lock, and
+    // classify what changed while both old and new are at hand.
+    let (merged, changed, connection_changed, previous_battery) = {
+        let mut guard = state.last_presence.lock();
+        let (merged, changed, previous_battery) = match guard.take() {
+            Some(previous) => {
+                let merged = merge_event_snapshot(&previous, snapshot);
+                let changed = previous.connected != merged.connected
+                    || previous.mic_muted != merged.mic_muted
+                    || previous.battery_percent != merged.battery_percent
+                    || previous.game_volume != merged.game_volume
+                    || previous.chat_volume != merged.chat_volume
+                    || previous.error != merged.error;
+                (merged, changed, previous.battery_percent)
+            }
+            None => (snapshot, true, None),
+        };
+        let connection_changed =
+            merged.has_connection_status && *stable_connected != Some(merged.connected);
+        *guard = Some(merged.clone());
+        (merged, changed, connection_changed, previous_battery)
+    };
+
+    // Repeated reports with no observable change need no side effects at all.
+    if !changed && !initial {
+        return;
+    }
+
+    status_file::write(&merged);
+    maybe_notify_low_battery(app, state, previous_battery, &merged);
+    sync_chatmix(
+        state,
+        &merged,
+        if initial { "initial" } else { "hid_event" },
+    );
+
+    if initial || connection_changed {
+        *stable_connected = Some(merged.connected);
+        decide_and_apply(
+            state,
+            merged.connected,
+            merged.has_connection_status,
+            if initial { "Initial" } else { "Event" },
+        );
         // The connection event itself carries no chatmix wheel position, so once we
         // know the headset just connected, actively read the current wheel state.
-        if connected {
-            refresh_chatmix_on_connect(app, state);
+        if !initial && merged.connected {
+            refresh_chatmix_on_connect(state);
         }
-    } else {
-        let _ = app.emit("autoswapper://state-changed", now_ms());
+    }
+
+    let _ = app.emit(STATE_CHANGED_EVENT, now_ms());
+}
+
+/// One-shot desktop notification when the battery crosses down to the configured
+/// threshold while connected. Crossing-based, so charging back above the threshold
+/// re-arms it, and a startup that already sees a low battery notifies once.
+fn maybe_notify_low_battery(
+    app: &AppHandle,
+    state: &AppState,
+    previous_battery: Option<u8>,
+    merged: &PresenceSnapshot,
+) {
+    let threshold = state.config.lock().low_battery_percent;
+    if threshold == 0 || !merged.connected {
+        return;
+    }
+    let Some(battery) = merged.battery_percent else {
+        return;
+    };
+    let already_notified = previous_battery.is_some_and(|previous| previous <= threshold);
+    if battery > threshold || already_notified {
+        return;
+    }
+
+    match app
+        .notification()
+        .builder()
+        .title("Headset battery low")
+        .body(format!("{battery}% battery remaining"))
+        .show()
+    {
+        Ok(()) => push_event(
+            state,
+            DiagnosticEvent::info(format!("Low battery notification sent ({battery}%)")),
+        ),
+        Err(error) => push_event(
+            state,
+            DiagnosticEvent::warn(format!("Battery notification failed: {error}")),
+        ),
+    }
+}
+
+/// Run the switch decision for the given presence and apply it, logging the outcome
+/// under the given label ("Initial", "Event", "Device-change").
+fn decide_and_apply(state: &AppState, connected: bool, has_status: bool, label: &str) {
+    let decision = match decide_current(state, connected, has_status) {
+        Ok(decision) => decision,
+        Err(error) => {
+            push_event(
+                state,
+                DiagnosticEvent::warn(format!("Could not enumerate audio endpoints: {error}")),
+            );
+            return;
+        }
+    };
+    match apply_decision(state, &decision) {
+        Ok(()) => push_event(
+            state,
+            DiagnosticEvent::info(format!(
+                "{label} autoswitch applied: {} ({})",
+                decision.reason,
+                if connected {
+                    "connected"
+                } else {
+                    "disconnected"
+                }
+            )),
+        ),
+        Err(error) => push_event(
+            state,
+            DiagnosticEvent::warn(format!("Autoswitch failed: {error}")),
+        ),
     }
 }
 
 /// Re-query the status interface after a connect to seed the chatmix wheel position.
 /// The dongle only pushes the wheel state when it moves, so without this the app keeps
 /// stale (or unknown) game/chat values until the user touches the wheel.
-fn refresh_chatmix_on_connect(app: &AppHandle, state: &AppState) {
+fn refresh_chatmix_on_connect(state: &AppState) {
     let status = state.presence.lock().refresh_status();
     let (Some(game), Some(chat)) = (status.game_volume, status.chat_volume) else {
         return;
@@ -168,116 +268,19 @@ fn refresh_chatmix_on_connect(app: &AppHandle, state: &AppState) {
         }
     };
 
-    let Some(presence) = updated else {
-        return;
-    };
-    if let Err(error) = sync_chatmix(state, &presence, "connect") {
-        push_event(
-            state,
-            DiagnosticEvent::warn(format!("ChatMix apply failed: {error}")),
-        );
+    if let Some(presence) = updated {
+        sync_chatmix(state, &presence, "connect");
     }
-    let _ = app.emit("autoswapper://state-changed", now_ms());
 }
 
-fn merge_presence_snapshot(state: &AppState, snapshot: PresenceSnapshot) -> PresenceSnapshot {
-    let previous = state.last_presence.lock().clone();
-    let Some(previous) = previous else {
-        return snapshot;
-    };
-
+/// Merge an event report into the previous state: fields the report does not carry are
+/// kept from before (see [`merge_partial_snapshot`]), but `raw_response` and `error`
+/// always reflect the newest event, so a stale error never outlives the report that
+/// superseded it.
+fn merge_event_snapshot(previous: &PresenceSnapshot, next: PresenceSnapshot) -> PresenceSnapshot {
     PresenceSnapshot {
-        connected: if snapshot.has_connection_status {
-            snapshot.connected
-        } else {
-            previous.connected
-        },
-        has_connection_status: snapshot.has_connection_status || previous.has_connection_status,
-        mic_muted: snapshot.mic_muted.or(previous.mic_muted),
-        battery_percent: snapshot.battery_percent.or(previous.battery_percent),
-        game_volume: snapshot.game_volume.or(previous.game_volume),
-        chat_volume: snapshot.chat_volume.or(previous.chat_volume),
-        raw_response: snapshot.raw_response,
-        device_path: snapshot.device_path.or(previous.device_path),
-        error: snapshot.error,
-        observed_at_ms: snapshot.observed_at_ms,
+        raw_response: next.raw_response.clone(),
+        error: next.error.clone(),
+        ..merge_partial_snapshot(previous.clone(), next)
     }
-}
-
-fn presence_changed(state: &AppState, next: &PresenceSnapshot) -> bool {
-    let previous = state.last_presence.lock().clone();
-    let Some(previous) = previous else {
-        return true;
-    };
-
-    previous.connected != next.connected
-        || previous.mic_muted != next.mic_muted
-        || previous.battery_percent != next.battery_percent
-        || previous.game_volume != next.game_volume
-        || previous.chat_volume != next.chat_volume
-        || previous.error != next.error
-}
-
-fn handle_presence_snapshot(
-    app: &AppHandle,
-    state: &AppState,
-    snapshot: PresenceSnapshot,
-    initial: bool,
-) {
-    let connected = snapshot.connected;
-    if initial && (snapshot.game_volume.is_some() || snapshot.chat_volume.is_some()) {
-        log_chatmix_wheel(state, "initial", snapshot.game_volume, snapshot.chat_volume);
-    }
-    *state.last_presence.lock() = Some(snapshot.clone());
-    if let Err(error) = sync_chatmix(
-        state,
-        &snapshot,
-        if initial { "initial" } else { "presence" },
-    ) {
-        push_event(
-            state,
-            DiagnosticEvent::warn(format!("ChatMix apply failed: {error}")),
-        );
-    }
-
-    if let Some(error) = snapshot.error {
-        push_event(
-            state,
-            DiagnosticEvent::warn(format!("Presence event failed: {error}")),
-        );
-        let _ = app.emit("autoswapper://state-changed", now_ms());
-        return;
-    }
-
-    let decision = match decide_current(state, connected, snapshot.has_connection_status) {
-        Ok(decision) => decision,
-        Err(error) => {
-            push_event(
-                state,
-                DiagnosticEvent::warn(format!("Could not enumerate audio endpoints: {error}")),
-            );
-            let _ = app.emit("autoswapper://state-changed", now_ms());
-            return;
-        }
-    };
-    match apply_decision(state, &decision) {
-        Ok(()) => push_event(
-            state,
-            DiagnosticEvent::info(format!(
-                "{} autoswitch applied: {} ({})",
-                if initial { "Initial" } else { "Event" },
-                decision.reason,
-                if connected {
-                    "connected"
-                } else {
-                    "disconnected"
-                }
-            )),
-        ),
-        Err(error) => push_event(
-            state,
-            DiagnosticEvent::warn(format!("Autoswitch failed: {error}")),
-        ),
-    }
-    let _ = app.emit("autoswapper://state-changed", now_ms());
 }

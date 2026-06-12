@@ -19,7 +19,7 @@ use crate::models::{
 };
 use crate::presence::{merge_partial_snapshot, parse_event_snapshot, HeadsetPresenceBackend};
 use crate::switch::{apply_decision, decide_current};
-use crate::volume::sync_chatmix;
+use crate::volume::try_sync_chatmix;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
@@ -154,6 +154,7 @@ fn switch_config() -> AppConfig {
             priorities: vec![pref("arctis-mic"), pref("fallback-mic")],
         },
         chatmix: ChatMixConfig::default(),
+        low_battery_percent: 0,
         debug: Default::default(),
     }
 }
@@ -229,8 +230,8 @@ fn status_poll_reply_seeds_connected_state() {
     let state = make_state(backend.clone(), switch_config());
 
     // `B0 03 44 03 63 64` — connected status reply (battery 68%, wheel game=99 chat=100).
-    let snapshot =
-        parse_event_snapshot(&[0xB0, 0x03, 0x44, 0x03, 0x63, 0x64], "test").expect("status snapshot");
+    let snapshot = parse_event_snapshot(&[0xB0, 0x03, 0x44, 0x03, 0x63, 0x64], "test")
+        .expect("status snapshot");
     assert!(snapshot.connected);
     assert!(snapshot.has_connection_status);
     assert_eq!(snapshot.battery_percent, Some(68));
@@ -260,7 +261,7 @@ fn chatmix_wheel_packet_scales_app_volume() {
     assert_eq!(merged.game_volume, Some(50));
     assert_eq!(merged.chat_volume, Some(100));
 
-    sync_chatmix(&state, &merged, "test").expect("sync_chatmix");
+    try_sync_chatmix(&state, &merged, "test").expect("sync_chatmix");
 
     let calls = backend.volume_calls.lock().clone();
     assert_eq!(calls.len(), 1, "exactly one volume change applied");
@@ -285,11 +286,11 @@ fn chatmix_restores_baseline_when_headset_disconnects() {
     let connected = parse_event_snapshot(&[0xB9, 0x03], "test").unwrap();
     let wheel = parse_event_snapshot(&[0x45, 0x32, 0x64], "test").unwrap();
     let merged = merge_partial_snapshot(connected, wheel);
-    sync_chatmix(&state, &merged, "test").unwrap();
+    try_sync_chatmix(&state, &merged, "test").unwrap();
 
     // Then a power-off (`B9 02`) must restore the captured baseline (0.4) for the session.
     let off = parse_event_snapshot(&[0xB9, 0x02], "test").unwrap();
-    sync_chatmix(&state, &off, "test").unwrap();
+    try_sync_chatmix(&state, &off, "test").unwrap();
 
     let calls = backend.volume_calls.lock().clone();
     let last = calls.last().expect("a restore volume change");

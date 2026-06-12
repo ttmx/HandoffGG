@@ -14,6 +14,10 @@ This was almost entirely vibecoded, with some manual cleanup here and there.
 - DOESN'T KEEP RESETTING YOUR DEVICE PREFERENCES. 
 - DOESN'T RANDOMLY STOP OPENING.
 - 6MB memory usage when in the tray.
+- Sends a desktop notification when the headset battery runs low (threshold
+  configurable in settings, works without a tray).
+- Mirrors the live headset state to a small JSON file for scripts and status
+  bars (see [Status file](#status-file)).
 
 ## Limitations
 This was developed against a SteelSeries Arctis Nova 7 on Windows 11. The Linux backend (PipeWire) was written and tested without the headset on hand — the HID layer is shared with Windows and validated by replaying captured USB report frames through the decision pipeline (see `src-tauri/src/pipeline_tests.rs`), but real-hardware confirmation on Linux is still welcome. Very likely not to work with most other models; if there is interest in supporting more, PRs are welcome.
@@ -62,6 +66,38 @@ HandoffGG lives in the background. How you reach it depends on the desktop:
     terminal, `handoffgg --quit` also works.
 - **Autostart** (any desktop): enable it from the settings window. The login-time launch
   passes `--hidden` so it starts quietly in the background instead of popping the window.
+
+## Status file
+
+On every headset state change, HandoffGG writes the current status as JSON to:
+
+- **Linux**: `$XDG_RUNTIME_DIR/handoffgg/status.json`
+- **Windows**: `%TEMP%\handoffgg\status.json`
+
+```json
+{
+  "connected": true,
+  "batteryPercent": 68,
+  "micMuted": false,
+  "gameVolume": 100,
+  "chatVolume": 100,
+  "error": null,
+  "observedAtMs": 1765500000000
+}
+```
+
+Writes are atomic, so it is always a complete document. This makes battery/mute
+trivially scriptable on desktops without a tray — e.g. a waybar custom module:
+
+```jsonc
+"custom/headset": {
+  "exec": "jq -r 'if .connected then \"\\(.batteryPercent)%\" else \"off\" end' $XDG_RUNTIME_DIR/handoffgg/status.json",
+  "interval": 30
+}
+```
+
+The file is only as fresh as the last event (check `observedAtMs` if you need to
+detect a stale file after a crash).
 
 ## Development
 

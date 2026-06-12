@@ -7,7 +7,10 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::window::Color;
 use tauri::{AppHandle, Manager, Theme, WebviewUrl, WebviewWindowBuilder};
 
-const WINDOW_BACKGROUND: Color = Color(0x1b, 0x1d, 0x20, 0xff);
+/// Native pre-paint backgrounds matching the stylesheet's `--bg` for each scheme, so
+/// resizing never flashes a mismatched color behind the webview.
+const DARK_BACKGROUND: Color = Color(0x1b, 0x1d, 0x20, 0xff);
+const LIGHT_BACKGROUND: Color = Color(0xf6, 0xf7, 0xf9, 0xff);
 
 pub(crate) fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open settings", true, None::<&str>)?;
@@ -56,15 +59,21 @@ pub(crate) fn show_main_window(app: &AppHandle) -> tauri::Result<()> {
                 .settings_window_pending_show
                 .store(true, Ordering::SeqCst);
         }
-        WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+        // No explicit theme: the webview follows the system scheme and the stylesheet
+        // carries both palettes. The window stays invisible until the frontend calls
+        // `settings_ready`, so correcting the pre-paint background after creation
+        // (the builder cannot know the system theme yet) never causes a flash.
+        let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
             .title("HandoffGG")
             .inner_size(983.0, 667.0)
             .min_inner_size(760.0, 560.0)
             .decorations(false)
-            .theme(Some(Theme::Dark))
-            .background_color(WINDOW_BACKGROUND)
+            .background_color(DARK_BACKGROUND)
             .visible(false)
             .build()?;
+        if matches!(window.theme(), Ok(Theme::Light)) {
+            let _ = window.set_background_color(Some(LIGHT_BACKGROUND));
+        }
     }
     Ok(())
 }

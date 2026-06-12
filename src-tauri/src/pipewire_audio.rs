@@ -149,7 +149,13 @@ impl PipewireAudioBackend {
         let thread = thread::Builder::new()
             .name("handoffgg-pipewire".into())
             .spawn(move || {
-                pw_thread(cmd_rx, cmd_tx_for_thread, mirror_for_thread, change_tx, ready_tx)
+                pw_thread(
+                    cmd_rx,
+                    cmd_tx_for_thread,
+                    mirror_for_thread,
+                    change_tx,
+                    ready_tx,
+                )
             })
             .context("failed to spawn PipeWire thread")?;
 
@@ -196,10 +202,7 @@ impl AudioBackend for PipewireAudioBackend {
             let Some(id) = node.node_name.clone() else {
                 continue;
             };
-            let name = node
-                .description
-                .clone()
-                .unwrap_or_else(|| id.clone());
+            let name = node.description.clone().unwrap_or_else(|| id.clone());
 
             endpoints.push(AudioEndpoint {
                 is_presence_tracked: is_presence_tracked(&name),
@@ -417,12 +420,20 @@ fn run_pw_session(
 
     let main_loop = match pw::main_loop::MainLoopRc::new(None) {
         Ok(loop_) => loop_,
-        Err(error) => return fail(&ready_tx, anyhow!("failed to create PipeWire loop: {error}")),
+        Err(error) => {
+            return fail(
+                &ready_tx,
+                anyhow!("failed to create PipeWire loop: {error}"),
+            )
+        }
     };
     let context = match pw::context::ContextRc::new(&main_loop, None) {
         Ok(context) => context,
         Err(error) => {
-            return fail(&ready_tx, anyhow!("failed to create PipeWire context: {error}"))
+            return fail(
+                &ready_tx,
+                anyhow!("failed to create PipeWire context: {error}"),
+            )
         }
     };
     let core = match context.connect_rc(None) {
@@ -436,7 +447,12 @@ fn run_pw_session(
     };
     let registry = match core.get_registry_rc() {
         Ok(registry) => registry,
-        Err(error) => return fail(&ready_tx, anyhow!("failed to get PipeWire registry: {error}")),
+        Err(error) => {
+            return fail(
+                &ready_tx,
+                anyhow!("failed to get PipeWire registry: {error}"),
+            )
+        }
     };
 
     let loop_state = Rc::new(RefCell::new(LoopState::default()));
@@ -445,13 +461,18 @@ fn run_pw_session(
     // (sinks, sources, streams, the `default` metadata object); binding the metadata proxy
     // in that pass triggers its property replay, which only lands on the second roundtrip.
     // Waiting for both means the first `endpoints()` already knows the current defaults.
+    enum ReadyPhase {
+        AwaitingFirst(spa::utils::result::AsyncSeq),
+        AwaitingSecond(spa::utils::result::AsyncSeq),
+        Done,
+    }
+
     let pending = match core.sync(0) {
         Ok(seq) => seq,
         Err(error) => return fail(&ready_tx, anyhow!("PipeWire sync failed: {error}")),
     };
+    let phase = RefCell::new(ReadyPhase::AwaitingFirst(pending));
     let ready_slot = RefCell::new(ready_tx);
-    let first_done = RefCell::new(false);
-    let second_seq = RefCell::new(None);
     let core_for_done = core.clone();
     let main_loop_weak = main_loop.downgrade();
     let _core_listener = core
@@ -460,17 +481,21 @@ fn run_pw_session(
             if id != pw::core::PW_ID_CORE {
                 return;
             }
-            if !*first_done.borrow() && seq == pending {
-                *first_done.borrow_mut() = true;
-                match core_for_done.sync(0) {
-                    Ok(seq2) => *second_seq.borrow_mut() = Some(seq2),
-                    Err(_) => {
-                        if let Some(tx) = ready_slot.borrow_mut().take() {
-                            let _ = tx.send(Ok(()));
-                        }
+            let next = match *phase.borrow() {
+                // First roundtrip complete: issue the second. If that fails, signal
+                // ready now rather than never.
+                ReadyPhase::AwaitingFirst(expected) if seq == expected => {
+                    match core_for_done.sync(0) {
+                        Ok(second) => ReadyPhase::AwaitingSecond(second),
+                        Err(_) => ReadyPhase::Done,
                     }
                 }
-            } else if *second_seq.borrow() == Some(seq) {
+                ReadyPhase::AwaitingSecond(expected) if seq == expected => ReadyPhase::Done,
+                _ => return,
+            };
+            let became_done = matches!(next, ReadyPhase::Done);
+            *phase.borrow_mut() = next;
+            if became_done {
                 if let Some(tx) = ready_slot.borrow_mut().take() {
                     let _ = tx.send(Ok(()));
                 }
@@ -498,7 +523,13 @@ fn run_pw_session(
             .add_listener_local()
             .global(move |global| {
                 if let Some(registry) = registry_weak.upgrade() {
-                    handle_global(&registry, global, &mirror_global, &change_global, &state_global);
+                    handle_global(
+                        &registry,
+                        global,
+                        &mirror_global,
+                        &change_global,
+                        &state_global,
+                    );
                 }
             })
             .global_remove(move |id| {
@@ -626,10 +657,8 @@ fn handle_global(
             }
         }
         ObjectType::Metadata => {
-            let is_default = global
-                .props
-                .and_then(|props| props.get("metadata.name"))
-                == Some("default");
+            let is_default =
+                global.props.and_then(|props| props.get("metadata.name")) == Some("default");
             if !is_default {
                 return;
             }
@@ -707,7 +736,11 @@ fn handle_global(
     }
 }
 
-fn handle_command(command: Command, loop_state: &Rc<RefCell<LoopState>>, mirror: &Arc<Mutex<Mirror>>) {
+fn handle_command(
+    command: Command,
+    loop_state: &Rc<RefCell<LoopState>>,
+    mirror: &Arc<Mutex<Mirror>>,
+) {
     match command {
         Command::SetDefault {
             node_name,

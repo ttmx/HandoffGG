@@ -6,7 +6,7 @@ use crate::models::{
     PresenceSnapshot, SwitchDecision,
 };
 use crate::switch::{apply_decision, decide_current};
-use crate::volume::sync_chatmix;
+use crate::volume::{sync_chatmix, try_sync_chatmix};
 use crate::window::show_main_window;
 use crate::{config, theme};
 use std::sync::atomic::Ordering;
@@ -102,19 +102,12 @@ pub(crate) fn set_app_chatmix_route(
             display_name,
         },
     );
-    config::save(&state.config_path, &config).map_err(|error| error.to_string())?;
-    *state.config.lock() = config.clone();
+    let config = save_config(config, state.clone())?;
 
     if let Some(presence) = state.last_presence.lock().clone() {
-        if let Err(error) = sync_chatmix(&state, &presence, "route_change") {
-            push_event(
-                &state,
-                DiagnosticEvent::warn(format!("ChatMix apply failed: {error}")).category("chatmix"),
-            );
-        }
+        sync_chatmix(&state, &presence, "route_change");
     }
 
-    push_event(&state, DiagnosticEvent::info("ChatMix app route saved"));
     Ok(config)
 }
 
@@ -150,5 +143,5 @@ pub(crate) fn sync_chatmix_now(state: State<'_, SharedState>) -> Result<(), Stri
     let Some(presence) = state.last_presence.lock().clone() else {
         return Ok(());
     };
-    sync_chatmix(&state, &presence, "manual_debug").map_err(|error| error.to_string())
+    try_sync_chatmix(&state, &presence, "manual_debug").map_err(|error| error.to_string())
 }
