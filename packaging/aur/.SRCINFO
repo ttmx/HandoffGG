@@ -1,6 +1,6 @@
 pkgbase = handoffgg
 	pkgdesc = Automatic audio device switching and ChatMix for SteelSeries wireless headsets (PipeWire)
-	pkgver = 0.1.0
+	pkgver = 0.2.0
 	pkgrel = 1
 	url = https://github.com/ttmx/HandoffGG
 	install = handoffgg.install
@@ -18,7 +18,7 @@ pkgbase = handoffgg
 	depends = libayatana-appindicator
 	depends = pipewire
 	depends = hidapi
-	source = git+https://github.com/ttmx/HandoffGG.git#tag=v0.1.0
+	source = git+https://github.com/ttmx/HandoffGG.git#tag=v0.2.0
 	sha256sums = SKIP
 
 pkgname = handoffgg
