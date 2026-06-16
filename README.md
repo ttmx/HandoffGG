@@ -11,6 +11,7 @@ This was almost entirely vibecoded, with some manual cleanup here and there.
 
 - Allows you to set a priority list of audio devices for output/input. When your SteelSeries headset disconnects, it moves down the list to the next available device, same thing happens if a device is unplugged. When the headset reconnects, it moves back up to the headset devices.
 - Allows you to use the headset's chatmix wheel to adjust the volume of apps configured as "chat" and "game". Apps are assigned to chat automatically via OS audio sessions (Windows audio sessions / PipeWire output streams), but you can also set them manually.
+- Lets you set the mic sidetone (how much of your own voice is looped back into the headset) to off/low/medium/high. The level is saved and re-applied whenever the headset reconnects, so it stays in sync with the setting you picked.
 - DOESN'T KEEP RESETTING YOUR DEVICE PREFERENCES. 
 - DOESN'T RANDOMLY STOP OPENING.
 - 6MB memory usage when in the tray.

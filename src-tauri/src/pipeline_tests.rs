@@ -93,6 +93,9 @@ impl HeadsetPresenceBackend for MockPresence {
     fn refresh_status(&mut self) -> PresenceSnapshot {
         PresenceSnapshot::error("mock presence")
     }
+    fn set_sidetone(&mut self, _level: crate::models::Sidetone) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 fn endpoint(id: &str, flow: EndpointFlow, presence_tracked: bool) -> AudioEndpoint {
@@ -154,6 +157,7 @@ fn switch_config() -> AppConfig {
             priorities: vec![pref("arctis-mic"), pref("fallback-mic")],
         },
         chatmix: ChatMixConfig::default(),
+        sidetone: Default::default(),
         low_battery_percent: 0,
         debug: Default::default(),
     }

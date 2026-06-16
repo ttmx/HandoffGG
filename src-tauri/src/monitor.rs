@@ -163,6 +163,12 @@ fn process_snapshot(
             merged.has_connection_status,
             if initial { "Initial" } else { "Event" },
         );
+        // Re-assert the configured sidetone level whenever we see the headset connected
+        // (including at startup) so the device matches the saved setting.
+        if merged.connected {
+            apply_configured_sidetone(state);
+        }
+
         // The connection event itself carries no chatmix wheel position, so once we
         // know the headset just connected, actively read the current wheel state.
         if !initial && merged.connected {
@@ -241,6 +247,23 @@ fn decide_and_apply(state: &AppState, connected: bool, has_status: bool, label: 
         Err(error) => push_event(
             state,
             DiagnosticEvent::warn(format!("Autoswitch failed: {error}")),
+        ),
+    }
+}
+
+/// Push the configured mic sidetone level to the dongle. Called on every connect (and
+/// at startup) so the headset matches the saved setting. Best-effort: a failure is
+/// logged but never blocks the rest of the pipeline.
+fn apply_configured_sidetone(state: &AppState) {
+    let level = state.config.lock().sidetone;
+    match state.presence.lock().set_sidetone(level) {
+        Ok(()) => push_event(
+            state,
+            DiagnosticEvent::info(format!("Mic sidetone applied: {level:?}")),
+        ),
+        Err(error) => push_event(
+            state,
+            DiagnosticEvent::warn(format!("Mic sidetone apply failed: {error}")),
         ),
     }
 }

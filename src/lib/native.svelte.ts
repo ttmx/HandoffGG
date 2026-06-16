@@ -29,11 +29,15 @@ export type FlowConfig = {
 	priorities: DevicePref[];
 };
 
+/** Mic sidetone (voice loopback) level. */
+export type Sidetone = 'off' | 'low' | 'medium' | 'high';
+
 export type AppConfig = {
 	autoswitchEnabled: boolean;
 	output: FlowConfig;
 	input: FlowConfig;
 	chatmix: ChatMixConfig;
+	sidetone: Sidetone;
 	/** Notify when battery drops to/below this percentage; 0 disables. */
 	lowBatteryPercent: number;
 	debug: DebugConfig;
@@ -328,6 +332,19 @@ class NativeBridge {
 			clearTimeout(this.#savedTimer);
 			this.#savedTimer = setTimeout(() => (this.saved = false), 1600);
 			await this.refreshLiveState();
+		} catch (err) {
+			this.error = String(err);
+		}
+	};
+
+	/** Set (and persist) the mic sidetone level, writing it to the headset immediately. */
+	setSidetone = async (level: Sidetone): Promise<void> => {
+		this.error = '';
+		try {
+			this.config = await apiInvoke<AppConfig>('set_sidetone', { level });
+			this.saved = true;
+			clearTimeout(this.#savedTimer);
+			this.#savedTimer = setTimeout(() => (this.saved = false), 1600);
 		} catch (err) {
 			this.error = String(err);
 		}

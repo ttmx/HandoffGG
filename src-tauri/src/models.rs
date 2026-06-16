@@ -66,6 +66,10 @@ pub struct AppConfig {
     pub input: FlowConfig,
     #[serde(default)]
     pub chatmix: ChatMixConfig,
+    /// Mic sidetone (the loopback of your own voice into the headset). Persisted so it
+    /// can be re-applied on connect to keep the headset in sync with the chosen setting.
+    #[serde(default)]
+    pub sidetone: Sidetone,
     /// Notify when the battery drops to or below this percentage while connected.
     /// `0` disables the notification.
     #[serde(default = "default_low_battery_percent")]
@@ -81,6 +85,7 @@ impl Default for AppConfig {
             output: FlowConfig::default(),
             input: FlowConfig::default(),
             chatmix: ChatMixConfig::default(),
+            sidetone: Sidetone::default(),
             low_battery_percent: default_low_battery_percent(),
             debug: DebugConfig::default(),
         }
@@ -89,6 +94,31 @@ impl Default for AppConfig {
 
 fn default_low_battery_percent() -> u8 {
     15
+}
+
+/// Mic sidetone level. Decoded from a USB capture: the level is a HID Output report
+/// (opcode `0x39`) sent to the dongle's MI_03 interface, with the level in the next
+/// byte. The mapping is a clean linear scale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Sidetone {
+    #[default]
+    Off,
+    Low,
+    Medium,
+    High,
+}
+
+impl Sidetone {
+    /// The value byte that follows the `0x39` opcode in the sidetone report.
+    pub fn level_byte(self) -> u8 {
+        match self {
+            Sidetone::Off => 0x00,
+            Sidetone::Low => 0x01,
+            Sidetone::Medium => 0x02,
+            Sidetone::High => 0x03,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

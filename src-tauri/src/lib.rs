@@ -120,6 +120,7 @@ pub fn run() {
             commands::apply_now,
             commands::sync_chatmix_now,
             commands::set_autoswitch_enabled,
+            commands::set_sidetone,
             commands::set_app_chatmix_route,
             commands::open_settings,
             commands::settings_ready,

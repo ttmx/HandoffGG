@@ -4,6 +4,7 @@
 	import AppRouting from '$lib/components/AppRouting.svelte';
 	import DevicePriorityList from '$lib/components/DevicePriorityList.svelte';
 	import HeadsetStatus from '$lib/components/HeadsetStatus.svelte';
+	import SidetoneControl from '$lib/components/SidetoneControl.svelte';
 	import HidStatus from '$lib/components/HidStatus.svelte';
 	import DiagnosticsLog from '$lib/components/DiagnosticsLog.svelte';
 
@@ -25,6 +26,8 @@
 		<section class="mb-6">Loading...</section>
 	{:else}
 		<HeadsetStatus presence={native.presence} />
+
+		<SidetoneControl sidetone={native.config.sidetone} />
 
 		<section class="grid grid-cols-2 gap-[18px] max-[760px]:block">
 			<DevicePriorityList

@@ -1,5 +1,5 @@
 use crate::hid_report::HidReport;
-use crate::models::PresenceSnapshot;
+use crate::models::{PresenceSnapshot, Sidetone};
 use hidapi::{DeviceInfo, HidApi, HidDevice};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
@@ -13,7 +13,14 @@ pub trait HeadsetPresenceBackend: Send {
     /// push the chatmix wheel position on connect — it only emits it unsolicited when
     /// the wheel moves — so we read it back out of the status report on demand.
     fn refresh_status(&mut self) -> PresenceSnapshot;
+
+    /// Set the mic sidetone (voice loopback) level. Best-effort: the report goes to the
+    /// dongle's control interface, which is present even while the headset is off.
+    fn set_sidetone(&mut self, level: Sidetone) -> Result<(), String>;
 }
+
+/// Sidetone command opcode — report byte 0 of the `0x39` Output report sent to MI_03.
+const SIDETONE_OPCODE: u8 = 0x39;
 
 /// How long to wait between attempts to (re)start the event listeners while no
 /// dongle is present. Each attempt is a full USB enumeration (`HidApi::new`), so
@@ -112,6 +119,36 @@ impl HeadsetPresenceBackend for SteelSeriesHidPresenceBackend {
 
     fn refresh_status(&mut self) -> PresenceSnapshot {
         self.status_snapshot()
+    }
+
+    fn set_sidetone(&mut self, level: Sidetone) -> Result<(), String> {
+        let api = HidApi::new().map_err(|error| format!("HID init failed: {error}"))?;
+        let candidates = self.matching_devices(&api, self.status_interface_number);
+        if candidates.is_empty() {
+            return Err("SteelSeries HID interface MI_03 was not found".to_string());
+        }
+
+        // [report-id 0x00][opcode 0x39][level][zero padding] — hidapi consumes the
+        // leading report-id byte for this unnumbered report (see hid_report.rs).
+        let mut report = [0_u8; 65];
+        report[1] = SIDETONE_OPCODE;
+        report[2] = level.level_byte();
+
+        let mut last_error = None;
+        for device_info in candidates {
+            let path = device_info.path().to_string_lossy().to_string();
+            match device_info.open_device(&api) {
+                Ok(device) => match device.write(&report) {
+                    Ok(_) => return Ok(()),
+                    Err(error) => last_error = Some(format!("{path}: {error}")),
+                },
+                Err(error) => last_error = Some(format!("{path}: {error}")),
+            }
+        }
+
+        Err(last_error
+            .map(|raw| explain_open_error(&raw))
+            .unwrap_or_else(|| "Sidetone write failed".to_string()))
     }
 
     fn wait_for_event(&mut self, timeout: Duration) -> Option<PresenceSnapshot> {

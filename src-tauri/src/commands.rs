@@ -3,7 +3,7 @@
 use crate::app_state::{push_event, SharedState};
 use crate::models::{
     AppConfig, AudioEndpoint, AudioSession, ChatMixAppRoute, ChatMixRoute, DiagnosticEvent,
-    PresenceSnapshot, SwitchDecision,
+    PresenceSnapshot, Sidetone, SwitchDecision,
 };
 use crate::switch::{apply_decision, decide_current};
 use crate::volume::{sync_chatmix, try_sync_chatmix};
@@ -85,6 +85,23 @@ pub(crate) fn set_autoswitch_enabled(
     let mut config = state.config.lock().clone();
     config.autoswitch_enabled = enabled;
     save_config(config, state)
+}
+
+#[tauri::command]
+pub(crate) fn set_sidetone(
+    level: Sidetone,
+    state: State<'_, SharedState>,
+) -> Result<AppConfig, String> {
+    // Write to the device first; only persist the level if the dongle accepted it.
+    state.presence.lock().set_sidetone(level)?;
+    let mut config = state.config.lock().clone();
+    config.sidetone = level;
+    let config = save_config(config, state.clone())?;
+    push_event(
+        &state,
+        DiagnosticEvent::info(format!("Mic sidetone set to {level:?}")),
+    );
+    Ok(config)
 }
 
 #[tauri::command]
