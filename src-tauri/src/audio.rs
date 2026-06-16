@@ -10,6 +10,10 @@ pub trait AudioBackend: Send + Sync {
     /// hand out a receiver here, once, for the audio-device monitor to drive
     /// re-evaluation. Backends without such a channel (Windows uses its own
     /// `IMMNotificationClient` listener) return `None`.
+    ///
+    /// Only the Linux audio monitor calls this, so the default impl reads as dead code
+    /// on other platforms — allow it there rather than dropping a cross-platform method.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn take_change_receiver(&self) -> Option<std::sync::mpsc::Receiver<()>> {
         None
     }
