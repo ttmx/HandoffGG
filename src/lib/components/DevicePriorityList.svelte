@@ -9,7 +9,7 @@
 		type AudioEndpoint,
 		type EndpointFlow,
 	} from '$lib/native.svelte';
-    import { Headphones } from '@lucide/svelte';
+	import { GripVertical, Headphones } from '@lucide/svelte';
 
 	let {
 		title,
@@ -92,7 +92,7 @@
 				} ${available ? '' : 'opacity-55'}`}
 				animate:flip={{ duration: FLIP_MS }}
 			>
-				<span class="text-[15px] leading-none text-(--text-muted)" aria-hidden="true">⠿</span>
+				<GripVertical size={15} strokeWidth={2} class="text-(--text-muted)" aria-hidden="true" />
 				{#if row.isPresenceTracked}
 					<span
 						class={`text-[15px] ${connected ? 'opacity-100' : 'opacity-45 grayscale'}`}
@@ -140,13 +140,13 @@
 				class="flex cursor-grab items-center gap-2.25 rounded-md border border-(--border) bg-transparent px-2.5 py-1.5 active:cursor-grabbing"
 				animate:flip={{ duration: FLIP_MS }}
 			>
-				<span class="text-[15px] leading-none text-(--text-muted)" aria-hidden="true">⠿</span>
+				<GripVertical size={15} strokeWidth={2} class="text-(--text-muted)" aria-hidden="true" />
 				{#if row.isPresenceTracked}
 					<span
 						class={`text-[15px] ${connected ? 'opacity-100' : 'opacity-45 grayscale'}`}
 						title={stateLabel(row)}
 					>
-						🎧
+						<Headphones size={14} strokeWidth={2} />
 					</span>
 				{/if}
 				<span class="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{row.name}</span>

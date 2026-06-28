@@ -1,6 +1,6 @@
 [package]
 name = "autoswapper"
-version = "0.3.1"
+version = "0.3.2"
 description = "Windows audio autoswitcher for SteelSeries wireless headsets"
 authors = ["tiago"]
 edition = "2021"

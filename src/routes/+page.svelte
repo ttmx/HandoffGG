@@ -7,6 +7,8 @@
 	import SidetoneControl from '$lib/components/SidetoneControl.svelte';
 	import HidStatus from '$lib/components/HidStatus.svelte';
 	import DiagnosticsLog from '$lib/components/DiagnosticsLog.svelte';
+	import { version } from '../../package.json';
+	import { ChevronRight } from '@lucide/svelte';
 
 	onMount(() => {
 		let cleanup: (() => void) | undefined;
@@ -54,10 +56,19 @@
 			<summary
 				class="flex cursor-pointer list-none items-center gap-1.5 py-1.5 text-[13px] font-semibold text-[var(--text-muted)] select-none [&::-webkit-details-marker]:hidden"
 			>
-				<span class="inline-block transition-transform group-open:rotate-90">▸</span>
+				<ChevronRight
+					size={14}
+					strokeWidth={2.4}
+					class="transition-transform group-open:rotate-90"
+					aria-hidden="true"
+				/>
 				Debug
 			</summary>
 			<section class="mb-6 grid gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
+				<div class="flex items-center justify-between gap-3 text-[13px] font-semibold text-[var(--text-soft)]">
+					<span>Version</span>
+					<span class="text-[var(--text-muted)]">v{version}</span>
+				</div>
 				<label class="m-0 flex items-center justify-between gap-3 text-[13px] font-semibold text-[var(--text-soft)]">
 					<span>ChatMix writes</span>
 					<input
