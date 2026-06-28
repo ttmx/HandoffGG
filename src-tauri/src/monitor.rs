@@ -12,6 +12,13 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_notification::NotificationExt;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SnapshotSource {
+    Initial,
+    HidEvent,
+    Resume,
+}
+
 /// Emitted (with a `now_ms` payload) whenever backend state changed enough that the
 /// settings UI should refetch. Mirrored by `STATE_CHANGED_EVENT` in `native.svelte.ts`.
 pub(crate) const STATE_CHANGED_EVENT: &str = "autoswapper://state-changed";
@@ -20,7 +27,13 @@ pub(crate) fn start_monitor(app: AppHandle, state: SharedState) {
     thread::spawn(move || {
         let initial_snapshot = state.presence.lock().snapshot();
         let mut stable_connected = Some(initial_snapshot.connected);
-        process_snapshot(&app, &state, initial_snapshot, &mut stable_connected, true);
+        process_snapshot(
+            &app,
+            &state,
+            initial_snapshot,
+            Some(&mut stable_connected),
+            SnapshotSource::Initial,
+        );
 
         // Fully event-driven: the dongle pushes unsolicited reports for connection /
         // battery (MI_03) and mute / chatmix (MI_05). We block on those and react.
@@ -32,7 +45,39 @@ pub(crate) fn start_monitor(app: AppHandle, state: SharedState) {
             else {
                 continue;
             };
-            process_snapshot(&app, &state, snapshot, &mut stable_connected, false);
+            process_snapshot(
+                &app,
+                &state,
+                snapshot,
+                Some(&mut stable_connected),
+                SnapshotSource::HidEvent,
+            );
+        }
+    });
+}
+
+/// On OS resume, HID events that happened while the machine was asleep may never be
+/// replayed. Actively re-query the dongle after a short settle period, then force a
+/// switch decision from the fresh state even if the stored snapshot looks unchanged.
+pub(crate) fn refresh_after_resume(app: AppHandle, state: SharedState) {
+    thread::spawn(move || {
+        push_event(
+            &state,
+            DiagnosticEvent::info("System resumed; refreshing headset presence"),
+        );
+
+        for delay in [
+            Duration::from_millis(1_500),
+            Duration::from_millis(3_000),
+            Duration::from_millis(5_000),
+        ] {
+            thread::sleep(delay);
+            let snapshot = state.presence.lock().snapshot();
+            let had_error = snapshot.error.is_some();
+            process_snapshot(&app, &state, snapshot, None, SnapshotSource::Resume);
+            if !had_error {
+                break;
+            }
         }
     });
 }
@@ -87,15 +132,19 @@ fn process_snapshot(
     app: &AppHandle,
     state: &AppState,
     snapshot: PresenceSnapshot,
-    stable_connected: &mut Option<bool>,
-    initial: bool,
+    mut stable_connected: Option<&mut Option<bool>>,
+    source: SnapshotSource,
 ) {
     // A report that carries the wheel position is a chatmix event (0x45 wheel turn or
     // the startup 0xB0 poll). Log the raw reading before merging so it stays visible.
     if snapshot.game_volume.is_some() || snapshot.chat_volume.is_some() {
         log_chatmix_wheel(
             state,
-            if initial { "initial" } else { "wheel" },
+            match source {
+                SnapshotSource::Initial => "initial",
+                SnapshotSource::HidEvent => "wheel",
+                SnapshotSource::Resume => "resume",
+            },
             snapshot.game_volume,
             snapshot.chat_volume,
         );
@@ -109,7 +158,11 @@ fn process_snapshot(
         sync_chatmix(
             state,
             &snapshot,
-            if initial { "initial" } else { "presence" },
+            match source {
+                SnapshotSource::Initial => "initial",
+                SnapshotSource::HidEvent => "presence",
+                SnapshotSource::Resume => "resume",
+            },
         );
         push_event(
             state,
@@ -123,7 +176,7 @@ fn process_snapshot(
     // classify what changed while both old and new are at hand.
     let (merged, changed, connection_changed, previous_battery) = {
         let mut guard = state.last_presence.lock();
-        let (merged, changed, previous_battery) = match guard.take() {
+        let (merged, changed, previous_connected, previous_battery) = match guard.take() {
             Some(previous) => {
                 let merged = merge_event_snapshot(&previous, snapshot);
                 let changed = previous.connected != merged.connected
@@ -132,18 +185,26 @@ fn process_snapshot(
                     || previous.game_volume != merged.game_volume
                     || previous.chat_volume != merged.chat_volume
                     || previous.error != merged.error;
-                (merged, changed, previous.battery_percent)
+                (
+                    merged,
+                    changed,
+                    Some(previous.connected),
+                    previous.battery_percent,
+                )
             }
-            None => (snapshot, true, None),
+            None => (snapshot, true, None, None),
         };
-        let connection_changed =
-            merged.has_connection_status && *stable_connected != Some(merged.connected);
+        let connection_changed = merged.has_connection_status
+            && (previous_connected != Some(merged.connected)
+                || stable_connected
+                    .as_deref()
+                    .is_some_and(|stable| *stable != Some(merged.connected)));
         *guard = Some(merged.clone());
         (merged, changed, connection_changed, previous_battery)
     };
 
     // Repeated reports with no observable change need no side effects at all.
-    if !changed && !initial {
+    if !changed && source == SnapshotSource::HidEvent {
         return;
     }
 
@@ -152,16 +213,26 @@ fn process_snapshot(
     sync_chatmix(
         state,
         &merged,
-        if initial { "initial" } else { "hid_event" },
+        match source {
+            SnapshotSource::Initial => "initial",
+            SnapshotSource::HidEvent => "hid_event",
+            SnapshotSource::Resume => "resume",
+        },
     );
 
-    if initial || connection_changed {
-        *stable_connected = Some(merged.connected);
+    if source == SnapshotSource::Initial || source == SnapshotSource::Resume || connection_changed {
+        if let Some(stable_connected) = stable_connected.as_deref_mut() {
+            *stable_connected = Some(merged.connected);
+        }
         decide_and_apply(
             state,
             merged.connected,
             merged.has_connection_status,
-            if initial { "Initial" } else { "Event" },
+            match source {
+                SnapshotSource::Initial => "Initial",
+                SnapshotSource::HidEvent => "Event",
+                SnapshotSource::Resume => "Resume",
+            },
         );
         // Re-assert the configured sidetone level whenever we see the headset connected
         // (including at startup) so the device matches the saved setting.
@@ -171,7 +242,7 @@ fn process_snapshot(
 
         // The connection event itself carries no chatmix wheel position, so once we
         // know the headset just connected, actively read the current wheel state.
-        if !initial && merged.connected {
+        if source != SnapshotSource::Initial && merged.connected {
             refresh_chatmix_on_connect(state);
         }
     }

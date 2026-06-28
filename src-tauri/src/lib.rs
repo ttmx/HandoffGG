@@ -30,7 +30,7 @@ use crate::app_state::{config_path, push_event, AppState};
 use crate::audio::NativeAudioBackend;
 use crate::chatmix::ChatMixVolumeManager;
 use crate::models::{AppConfig, DiagnosticEvent};
-use crate::monitor::{start_audio_device_monitor, start_monitor};
+use crate::monitor::{refresh_after_resume, start_audio_device_monitor, start_monitor};
 use crate::presence::SteelSeriesHidPresenceBackend;
 use crate::window::build_tray;
 use parking_lot::Mutex;
@@ -128,11 +128,17 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building HandoffGG")
-        .run(|_, event| {
-            if let RunEvent::ExitRequested { api, code, .. } = event {
+        .run(|app, event| match event {
+            RunEvent::Resumed => {
+                if let Some(state) = app.try_state::<Arc<AppState>>() {
+                    refresh_after_resume(app.clone(), state.inner().clone());
+                }
+            }
+            RunEvent::ExitRequested { api, code, .. } => {
                 if code.is_none() {
                     api.prevent_exit();
                 }
             }
+            _ => {}
         });
 }
