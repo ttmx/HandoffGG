@@ -21,7 +21,7 @@ This was almost entirely vibecoded, with some manual cleanup here and there.
   bars (see [Status file](#status-file)).
 
 ## Limitations
-This was developed against a SteelSeries Arctis Nova 7 on Windows 11. The Linux backend (PipeWire) was written and tested without the headset on hand — the HID layer is shared with Windows and validated by replaying captured USB report frames through the decision pipeline (see `src-tauri/src/pipeline_tests.rs`), but real-hardware confirmation on Linux is still welcome. Very likely not to work with most other models; if there is interest in supporting more, PRs are welcome.
+This was developed against a SteelSeries Arctis Nova 7 and tested on Windows 11 and Linux with PipeWire. The HID layer is shared across platforms and validated by replaying captured USB report frames through the decision pipeline (see `src-tauri/src/pipeline_tests.rs`). Other SteelSeries wireless headsets may need additional HID mapping; PRs and USB captures are welcome.
 
 ## Installation
 
@@ -157,4 +157,4 @@ src-tauri/target/release/bundle/
   <img src="src-tauri/icons/handoffgg-icon.svg" alt="HandoffGG icon" width="96" height="96">
 </p>
 
-The icon is supposed to look like an H (from Handoff), two Gs with arrows, speaker drivers on the top, and headphones on the bottom, symbolizing the switching of audio devices. Also looks like a little face which is cool. An actual logo would be welcome, since this looks bad on the tiny tray and taskbar.
+The icon is supposed to look like an H (from Handoff), two Gs with arrows, speaker drivers on the top, and headphones on the bottom, symbolizing the switching of audio devices. Also looks like a little face which is cool. A cleaner logo would be welcome, especially for tiny tray and taskbar sizes.
